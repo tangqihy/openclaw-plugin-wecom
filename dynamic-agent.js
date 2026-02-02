@@ -16,7 +16,7 @@ import { logger } from "./logger.js";
 
 /**
  * 生成 AgentId
- * 规范：wxwork-dm-{userId} 或 wxwork-group-{groupId}
+ * 规范：wecom-dm-{userId} 或 wecom-group-{groupId}
  * 
  * @param {string} chatType - "dm" 或 "group"
  * @param {string} peerId - userId 或 groupId
@@ -25,28 +25,28 @@ import { logger } from "./logger.js";
 export function generateAgentId(chatType, peerId) {
     const sanitizedId = String(peerId).toLowerCase().replace(/[^a-z0-9_-]/g, "_");
     if (chatType === "group") {
-        return `wxwork-group-${sanitizedId}`;
+        return `wecom-group-${sanitizedId}`;
     }
-    return `wxwork-dm-${sanitizedId}`;
+    return `wecom-dm-${sanitizedId}`;
 }
 
 /**
  * 获取动态 Agent 配置
  */
 export function getDynamicAgentConfig(config) {
-    const wxwork = config?.channels?.wxwork || {};
+    const wecom = config?.channels?.wecom || {};
     return {
-        enabled: wxwork.dynamicAgents?.enabled !== false,
+        enabled: wecom.dynamicAgents?.enabled !== false,
 
         // 私聊配置
-        dmCreateAgent: wxwork.dm?.createAgentOnFirstMessage !== false,
+        dmCreateAgent: wecom.dm?.createAgentOnFirstMessage !== false,
 
         // 群聊配置
-        groupEnabled: wxwork.groupChat?.enabled !== false,
-        groupRequireMention: wxwork.groupChat?.requireMention !== false,
-        groupMentionPatterns: wxwork.groupChat?.mentionPatterns || ["@"],
-        groupCreateAgent: wxwork.groupChat?.createAgentOnFirstMessage !== false,
-        groupHistoryLimit: wxwork.groupChat?.historyLimit || 10,
+        groupEnabled: wecom.groupChat?.enabled !== false,
+        groupRequireMention: wecom.groupChat?.requireMention !== false,
+        groupMentionPatterns: wecom.groupChat?.mentionPatterns || ["@"],
+        groupCreateAgent: wecom.groupChat?.createAgentOnFirstMessage !== false,
+        groupHistoryLimit: wecom.groupChat?.historyLimit || 10,
     };
 }
 

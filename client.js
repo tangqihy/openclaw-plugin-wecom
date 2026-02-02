@@ -1,11 +1,11 @@
 /**
- * WxWork AI Bot Client
+ * WeCom AI Bot Client
  * 智能机器人专用 - 只使用 response_url 回复，不需要 access_token
  * https://developer.work.weixin.qq.com/document/path/101039
  */
 
 import { logger } from "./logger.js";
-import { withRetry, parseWxWorkError, CONSTANTS } from "./utils.js";
+import { withRetry, parseWecomError, CONSTANTS } from "./utils.js";
 
 /**
  * 通过 response_url 主动回复消息
@@ -32,7 +32,7 @@ export async function sendReplyMessage(responseUrl, message) {
 
         const data = await res.json();
         if (data.errcode !== 0) {
-            const errorInfo = parseWxWorkError(data.errcode, data.errmsg);
+            const errorInfo = parseWecomError(data.errcode, data.errmsg);
             throw new Error(`Response failed: [${data.errcode}] ${errorInfo.message}`);
         }
 
@@ -108,7 +108,7 @@ export async function sendStreamChunk(responseUrl, streamId, content, isFinished
 
     const data = await res.json();
     if (data.errcode !== 0) {
-        const errorInfo = parseWxWorkError(data.errcode, data.errmsg);
+        const errorInfo = parseWecomError(data.errcode, data.errmsg);
         throw new Error(`Stream response failed: [${data.errcode}] ${errorInfo.message}`);
     }
 

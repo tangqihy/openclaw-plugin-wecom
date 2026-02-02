@@ -7,7 +7,7 @@ import { logger } from "./logger.js";
  * Enterprise WeChat Intelligent Robot Crypto Implementation
  * Simplified for AI Bot mode (no corpId validation)
  */
-export class WxWorkCrypto {
+export class WecomCrypto {
     token;
     encodingAesKey;
     aesKey;
@@ -24,7 +24,7 @@ export class WxWorkCrypto {
         this.encodingAesKey = encodingAesKey;
         this.aesKey = Buffer.from(encodingAesKey + "=", "base64");
         this.iv = this.aesKey.subarray(0, 16);
-        logger.debug("WxWorkCrypto initialized (AI Bot mode)");
+        logger.debug("WecomCrypto initialized (AI Bot mode)");
     }
 
     getSignature(timestamp, nonce, encrypt) {

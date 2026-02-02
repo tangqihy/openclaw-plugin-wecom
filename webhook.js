@@ -1,9 +1,9 @@
-import { WxWorkCrypto } from "./crypto.js";
+import { WecomCrypto } from "./crypto.js";
 import { logger } from "./logger.js";
 import { MessageDeduplicator, randomString } from "./utils.js";
 
 /**
- * WxWork AI Bot Webhook Handler
+ * WeCom AI Bot Webhook Handler
  * Based on official demo: https://developer.work.weixin.qq.com/document/path/101039
  *
  * Key differences from legacy mode:
@@ -11,15 +11,15 @@ import { MessageDeduplicator, randomString } from "./utils.js";
  * - receiveid is empty string for AI Bot
  * - Response uses stream message format
  */
-export class WxWorkWebhook {
+export class WecomWebhook {
     config;
     crypto;
     deduplicator = new MessageDeduplicator();
 
     constructor(config) {
         this.config = config;
-        this.crypto = new WxWorkCrypto(config.token, config.encodingAesKey);
-        logger.debug("WxWorkWebhook initialized (AI Bot mode)");
+        this.crypto = new WecomCrypto(config.token, config.encodingAesKey);
+        logger.debug("WecomWebhook initialized (AI Bot mode)");
     }
 
     // =========================================================================
@@ -180,7 +180,7 @@ export class WxWorkWebhook {
             };
         }
         else if (msgtype === "stream") {
-            // Stream continuation request from WxWork
+            // Stream continuation request from WeCom
             const streamId = data.stream?.id;
             logger.debug("Received stream refresh request", { streamId });
             return {

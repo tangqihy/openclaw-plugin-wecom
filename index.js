@@ -1,4 +1,4 @@
-import { WxWorkWebhook } from "./webhook.js";
+import { WecomWebhook } from "./webhook.js";
 import { logger } from "./logger.js";
 import { streamManager } from "./stream-manager.js";
 import {
@@ -36,8 +36,8 @@ const DEFAULT_COMMAND_BLOCK_MESSAGE = `⚠️ 该命令不可用。
  * 获取命令白名单配置
  */
 function getCommandConfig(config) {
-  const wxwork = config?.channels?.wxwork || {};
-  const commands = wxwork.commands || {};
+  const wecom = config?.channels?.wecom || {};
+  const commands = wecom.commands || {};
   return {
     allowlist: commands.allowlist || DEFAULT_COMMAND_ALLOWLIST,
     blockMessage: commands.blockMessage || DEFAULT_COMMAND_BLOCK_MESSAGE,
@@ -90,7 +90,7 @@ function setRuntime(runtime) {
 
 function getRuntime() {
   if (!_runtime) {
-    throw new Error("[wxwork] Runtime not initialized");
+    throw new Error("[wecom] Runtime not initialized");
   }
   return _runtime;
 }
@@ -102,19 +102,19 @@ const webhookTargets = new Map();
 // can be added to the correct stream instead of using response_url
 const activeStreams = new Map();
 
-function normalizeWxWorkAllowFromEntry(raw) {
+function normalizeWecomAllowFromEntry(raw) {
   const trimmed = String(raw ?? "").trim();
   if (!trimmed) return null;
   if (trimmed === "*") return "*";
-  return trimmed.replace(/^(wxwork|wecom|wework):/i, "").replace(/^user:/i, "").toLowerCase();
+  return trimmed.replace(/^(wecom|wework):/i, "").replace(/^user:/i, "").toLowerCase();
 }
 
-function resolveWxWorkAllowFrom(cfg, accountId) {
-  const wxwork = cfg?.channels?.wxwork;
-  if (!wxwork) return [];
+function resolveWecomAllowFrom(cfg, accountId) {
+  const wecom = cfg?.channels?.wecom;
+  if (!wecom) return [];
 
   const normalizedAccountId = String(accountId || DEFAULT_ACCOUNT_ID).trim().toLowerCase();
-  const accounts = wxwork.accounts;
+  const accounts = wecom.accounts;
   const account =
     accounts && typeof accounts === "object"
       ? accounts[accountId] ??
@@ -124,20 +124,20 @@ function resolveWxWorkAllowFrom(cfg, accountId) {
       : undefined;
 
   const allowFromRaw =
-    account?.dm?.allowFrom ?? account?.allowFrom ?? wxwork.dm?.allowFrom ?? wxwork.allowFrom ?? [];
+    account?.dm?.allowFrom ?? account?.allowFrom ?? wecom.dm?.allowFrom ?? wecom.allowFrom ?? [];
 
   if (!Array.isArray(allowFromRaw)) return [];
 
   return allowFromRaw
-    .map(normalizeWxWorkAllowFromEntry)
+    .map(normalizeWecomAllowFromEntry)
     .filter((entry) => Boolean(entry));
 }
 
-function resolveWxWorkCommandAuthorized({ cfg, accountId, senderId }) {
+function resolveWecomCommandAuthorized({ cfg, accountId, senderId }) {
   const sender = String(senderId ?? "").trim().toLowerCase();
   if (!sender) return false;
 
-  const allowFrom = resolveWxWorkAllowFrom(cfg, accountId);
+  const allowFrom = resolveWecomAllowFrom(cfg, accountId);
   if (allowFrom.includes("*") || allowFrom.length === 0) return true;
   return allowFrom.includes(sender);
 }
@@ -170,13 +170,13 @@ function registerWebhookTarget(target) {
 // Channel Plugin Definition
 // =============================================================================
 
-const wxworkChannelPlugin = {
-  id: "wxwork",
+const wecomChannelPlugin = {
+  id: "wecom",
   meta: {
-    id: "wxwork",
+    id: "wecom",
     label: "Enterprise WeChat",
     selectionLabel: "Enterprise WeChat (AI Bot)",
-    docsPath: "/channels/wxwork",
+    docsPath: "/channels/wecom",
     blurb: "Enterprise WeChat AI Bot channel plugin.",
     aliases: ["wecom", "wework"],
   },
@@ -186,41 +186,41 @@ const wxworkChannelPlugin = {
     threads: false,
     media: false,
     nativeCommands: false,
-    blockStreaming: true, // WxWork AI Bot uses stream response format
+    blockStreaming: true, // WeCom AI Bot uses stream response format
   },
-  reload: { configPrefixes: ["channels.wxwork"] },
+  reload: { configPrefixes: ["channels.wecom"] },
   config: {
     listAccountIds: (cfg) => {
-      const wxwork = cfg?.channels?.wxwork;
-      if (!wxwork || !wxwork.enabled) return [];
+      const wecom = cfg?.channels?.wecom;
+      if (!wecom || !wecom.enabled) return [];
       return [DEFAULT_ACCOUNT_ID];
     },
     resolveAccount: (cfg, accountId) => {
-      const wxwork = cfg?.channels?.wxwork;
-      if (!wxwork) return null;
+      const wecom = cfg?.channels?.wecom;
+      if (!wecom) return null;
       return {
         id: accountId || DEFAULT_ACCOUNT_ID,
         accountId: accountId || DEFAULT_ACCOUNT_ID,
-        enabled: wxwork.enabled !== false,
-        token: wxwork.token || "",
-        encodingAesKey: wxwork.encodingAesKey || "",
-        webhookPath: wxwork.webhookPath || "/webhooks/wxwork",
-        config: wxwork,
+        enabled: wecom.enabled !== false,
+        token: wecom.token || "",
+        encodingAesKey: wecom.encodingAesKey || "",
+        webhookPath: wecom.webhookPath || "/webhooks/wecom",
+        config: wecom,
       };
     },
     defaultAccountId: (cfg) => {
-      const wxwork = cfg?.channels?.wxwork;
-      if (!wxwork || !wxwork.enabled) return null;
+      const wecom = cfg?.channels?.wecom;
+      if (!wecom || !wecom.enabled) return null;
       return DEFAULT_ACCOUNT_ID;
     },
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       if (!cfg.channels) cfg.channels = {};
-      if (!cfg.channels.wxwork) cfg.channels.wxwork = {};
-      cfg.channels.wxwork.enabled = enabled;
+      if (!cfg.channels.wecom) cfg.channels.wecom = {};
+      cfg.channels.wecom.enabled = enabled;
       return cfg;
     },
     deleteAccount: ({ cfg, accountId }) => {
-      if (cfg.channels?.wxwork) delete cfg.channels.wxwork;
+      if (cfg.channels?.wecom) delete cfg.channels.wecom;
       return cfg;
     },
   },
@@ -232,8 +232,8 @@ const wxworkChannelPlugin = {
   // Outbound adapter: Send messages via stream (all messages go through stream now)
   outbound: {
     sendText: async ({ cfg, to, text, accountId }) => {
-      // to格式: "wxwork:userid" 或 "userid"
-      const userId = to.replace(/^wxwork:/, "");
+      // to格式: \"wecom:userid\" 或 \"userid\"
+      const userId = to.replace(/^wecom:/, "");
 
       // 获取该用户当前活跃的 streamId
       const streamId = activeStreams.get(userId);
@@ -246,21 +246,21 @@ const wxworkChannelPlugin = {
         streamManager.appendStream(streamId, separator + text);
 
         return {
-          channel: "wxwork",
+          channel: "wecom",
           messageId: `msg_stream_${Date.now()}`,
         };
       }
 
       // 如果没有活跃的流，记录警告
-      logger.warn("WxWork outbound: no active stream for user", { userId });
+      logger.warn("WeCom outbound: no active stream for user", { userId });
 
       return {
-        channel: "wxwork",
+        channel: "wecom",
         messageId: `fake_${Date.now()}`,
       };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
-      const userId = to.replace(/^wxwork:/, "");
+      const userId = to.replace(/^wecom:/, "");
       const streamId = activeStreams.get(userId);
 
       if (streamId && streamManager.hasStream(streamId)) {
@@ -272,15 +272,15 @@ const wxworkChannelPlugin = {
         streamManager.appendStream(streamId, separator + content);
 
         return {
-          channel: "wxwork",
+          channel: "wecom",
           messageId: `msg_stream_${Date.now()}`,
         };
       }
 
-      logger.warn("WxWork outbound sendMedia: no active stream", { userId });
+      logger.warn("WeCom outbound sendMedia: no active stream", { userId });
 
       return {
-        channel: "wxwork",
+        channel: "wecom",
         messageId: `fake_${Date.now()}`,
       };
     },
@@ -288,17 +288,17 @@ const wxworkChannelPlugin = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      logger.info("WxWork gateway starting", { accountId: account.accountId, webhookPath: account.webhookPath });
+      logger.info("WeCom gateway starting", { accountId: account.accountId, webhookPath: account.webhookPath });
 
       const unregister = registerWebhookTarget({
-        path: account.webhookPath || "/webhooks/wxwork",
+        path: account.webhookPath || "/webhooks/wecom",
         account,
         config: ctx.cfg,
       });
 
       return {
         shutdown: async () => {
-          logger.info("WxWork gateway shutting down");
+          logger.info("WeCom gateway shutting down");
           unregister();
         },
       };
@@ -310,7 +310,7 @@ const wxworkChannelPlugin = {
 // HTTP Webhook Handler
 // =============================================================================
 
-async function wxworkHttpHandler(req, res) {
+async function wecomHttpHandler(req, res) {
   const url = new URL(req.url || "", "http://localhost");
   const path = normalizeWebhookPath(url.pathname);
   const targets = webhookTargets.get(path);
@@ -320,7 +320,7 @@ async function wxworkHttpHandler(req, res) {
   }
 
   const query = Object.fromEntries(url.searchParams);
-  logger.debug("WxWork HTTP request", { method: req.method, path });
+  logger.debug("WeCom HTTP request", { method: req.method, path });
 
   // GET: URL Verification
   if (req.method === "GET") {
@@ -331,7 +331,7 @@ async function wxworkHttpHandler(req, res) {
       return true;
     }
 
-    const webhook = new WxWorkWebhook({
+    const webhook = new WecomWebhook({
       token: target.account.token,
       encodingAesKey: target.account.encodingAesKey,
     });
@@ -340,13 +340,13 @@ async function wxworkHttpHandler(req, res) {
     if (echo) {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end(echo);
-      logger.info("WxWork URL verification successful");
+      logger.info("WeCom URL verification successful");
       return true;
     }
 
     res.writeHead(403, { "Content-Type": "text/plain" });
     res.end("Verification failed");
-    logger.warn("WxWork URL verification failed");
+    logger.warn("WeCom URL verification failed");
     return true;
   }
 
@@ -365,9 +365,9 @@ async function wxworkHttpHandler(req, res) {
       chunks.push(chunk);
     }
     const body = Buffer.concat(chunks).toString("utf-8");
-    logger.debug("WxWork message received", { bodyLength: body.length });
+    logger.debug("WeCom message received", { bodyLength: body.length });
 
-    const webhook = new WxWorkWebhook({
+    const webhook = new WecomWebhook({
       token: target.account.token,
       encodingAesKey: target.account.encodingAesKey,
     });
@@ -413,7 +413,7 @@ async function wxworkHttpHandler(req, res) {
         account: target.account,
         config: target.config,
       }).catch((err) => {
-        logger.error("WxWork message processing failed", { error: err.message });
+        logger.error("WeCom message processing failed", { error: err.message });
         // 即使失败也要标记流为完成
         streamManager.finishStream(streamId);
       });
@@ -474,7 +474,7 @@ async function wxworkHttpHandler(req, res) {
 
     // Handle event
     if (result.event) {
-      logger.info("WxWork event received", { event: result.event });
+      logger.info("WeCom event received", { event: result.event });
 
       // 处理进入会话事件 - 发送欢迎语
       if (result.event?.event_type === "enter_chat") {
@@ -544,7 +544,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   // 确定 peerId：群聊用 chatId，私聊用 senderId
   const peerId = isGroupChat ? chatId : senderId;
   const peerKind = isGroupChat ? "group" : "dm";
-  const conversationId = isGroupChat ? `wxwork:group:${chatId}` : `wxwork:${senderId}`;
+  const conversationId = isGroupChat ? `wecom:group:${chatId}` : `wecom:${senderId}`;
 
   // 设置用户当前活跃的 streamId，供 outbound.sendText 使用
   // 群聊时用 chatId 作为 key
@@ -557,21 +557,21 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   let rawBody = rawContent;
   if (isGroupChat) {
     if (!shouldTriggerGroupResponse(rawContent, config)) {
-      logger.debug("WxWork: group message ignored (no mention)", { chatId, senderId });
+      logger.debug("WeCom: group message ignored (no mention)", { chatId, senderId });
       return;
     }
     // 提取实际内容（移除 @提及）
     rawBody = extractGroupMessageContent(rawContent, config);
   }
 
-  const commandAuthorized = resolveWxWorkCommandAuthorized({
+  const commandAuthorized = resolveWecomCommandAuthorized({
     cfg: config,
     accountId: account.accountId,
     senderId,
   });
 
   if (!rawBody.trim()) {
-    logger.debug("WxWork: empty message, skipping");
+    logger.debug("WeCom: empty message, skipping");
     return;
   }
 
@@ -583,7 +583,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   if (commandCheck.isCommand && !commandCheck.allowed) {
     // 命令不在白名单中，返回拒绝消息
     const cmdConfig = getCommandConfig(config);
-    logger.warn("WxWork: blocked command", {
+    logger.warn("WeCom: blocked command", {
       command: commandCheck.command,
       from: senderId,
       chatType: peerKind
@@ -598,7 +598,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
     return;
   }
 
-  logger.info("WxWork processing message", {
+  logger.info("WeCom processing message", {
     from: senderId,
     chatType: peerKind,
     peerId,
@@ -626,7 +626,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   // ========================================================================
   const route = core.routing.resolveAgentRoute({
     cfg: config,
-    channel: "wxwork",
+    channel: "wecom",
     accountId: account.accountId,
     peer: {
       kind: peerKind,
@@ -666,7 +666,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
     Body: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    From: `wxwork:${senderId}`,
+    From: `wecom:${senderId}`,
     To: conversationId,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
@@ -675,9 +675,9 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
     SenderName: senderId,
     SenderId: senderId,
     GroupId: isGroupChat ? chatId : undefined,
-    Provider: "wxwork",
-    Surface: "wxwork",
-    OriginatingChannel: "wxwork",
+    Provider: "wecom",
+    Surface: "wecom",
+    OriginatingChannel: "wecom",
     OriginatingTo: conversationId,
     CommandAuthorized: commandAuthorized,
   });
@@ -688,7 +688,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
   }).catch((err) => {
-    logger.error("WxWork: failed updating session meta", { error: err.message });
+    logger.error("WeCom: failed updating session meta", { error: err.message });
   });
 
   // Dispatch reply with AI processing
@@ -703,7 +703,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
           textPreview: (payload.text || "").substring(0, 50),
         });
 
-        await deliverWxWorkReply({
+        await deliverWecomReply({
           payload,
           account,
           responseUrl,
@@ -714,11 +714,11 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
         // 如果是最终回复,标记流为完成
         if (streamId && info.kind === "final") {
           streamManager.finishStream(streamId);
-          logger.info("WxWork stream finished", { streamId });
+          logger.info("WeCom stream finished", { streamId });
         }
       },
       onError: (err, info) => {
-        logger.error("WxWork reply failed", { error: err.message, kind: info.kind });
+        logger.error("WeCom reply failed", { error: err.message, kind: info.kind });
         // 发生错误时也标记流为完成
         if (streamId) {
           streamManager.finishStream(streamId);
@@ -731,7 +731,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   if (streamId) {
     streamManager.finishStream(streamId);
     activeStreams.delete(streamKey);  // 清理活跃流映射
-    logger.info("WxWork stream finished (dispatch complete)", { streamId });
+    logger.info("WeCom stream finished (dispatch complete)", { streamId });
   }
 }
 
@@ -739,10 +739,10 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
 // Outbound Reply Delivery (Stream-only mode)
 // =============================================================================
 
-async function deliverWxWorkReply({ payload, account, responseUrl, senderId, streamId }) {
+async function deliverWecomReply({ payload, account, responseUrl, senderId, streamId }) {
   const text = payload.text || "";
 
-  logger.debug("deliverWxWorkReply called", {
+  logger.debug("deliverWecomReply called", {
     hasText: !!text.trim(),
     textPreview: text.substring(0, 50),
     streamId,
@@ -751,7 +751,7 @@ async function deliverWxWorkReply({ payload, account, responseUrl, senderId, str
 
   // 所有消息都通过流式发送
   if (!text.trim()) {
-    logger.debug("WxWork: empty block, skipping stream update");
+    logger.debug("WeCom: empty block, skipping stream update");
     return;
   }
 
@@ -762,7 +762,7 @@ async function deliverWxWorkReply({ payload, account, responseUrl, senderId, str
 
     // 去重：检查流内容是否已包含此消息（避免 block + final 重复）
     if (stream.content.includes(content.trim())) {
-      logger.debug("WxWork: duplicate content, skipping", {
+      logger.debug("WeCom: duplicate content, skipping", {
         streamId: targetStreamId,
         contentPreview: content.substring(0, 30)
       });
@@ -779,23 +779,23 @@ async function deliverWxWorkReply({ payload, account, responseUrl, senderId, str
     const activeStreamId = activeStreams.get(senderId);
     if (activeStreamId && streamManager.hasStream(activeStreamId)) {
       appendToStream(activeStreamId, text);
-      logger.debug("WxWork stream appended (via activeStreams)", {
+      logger.debug("WeCom stream appended (via activeStreams)", {
         streamId: activeStreamId,
         contentLength: text.length,
       });
       return;
     }
-    logger.warn("WxWork: no active stream for this message", { senderId });
+    logger.warn("WeCom: no active stream for this message", { senderId });
     return;
   }
 
   if (!streamManager.hasStream(streamId)) {
-    logger.warn("WxWork: stream not found, cannot update", { streamId });
+    logger.warn("WeCom: stream not found, cannot update", { streamId });
     return;
   }
 
   appendToStream(streamId, text);
-  logger.debug("WxWork stream appended", {
+  logger.debug("WeCom stream appended", {
     streamId,
     contentLength: text.length,
     to: senderId
@@ -812,19 +812,19 @@ const plugin = {
   description: "Enterprise WeChat AI Bot channel plugin for OpenClaw",
   configSchema: { type: "object", additionalProperties: false, properties: {} },
   register(api) {
-    logger.info("WxWork plugin registering...");
+    logger.info("WeCom plugin registering...");
 
     // Save runtime for message processing
     setRuntime(api.runtime);
     _openclawConfig = api.config;
 
     // Register channel
-    api.registerChannel({ plugin: wxworkChannelPlugin });
-    logger.info("WxWork channel registered");
+    api.registerChannel({ plugin: wecomChannelPlugin });
+    logger.info("WeCom channel registered");
 
     // Register HTTP handler for webhooks
-    api.registerHttpHandler(wxworkHttpHandler);
-    logger.info("WxWork HTTP handler registered");
+    api.registerHttpHandler(wecomHttpHandler);
+    logger.info("WeCom HTTP handler registered");
   },
 };
 

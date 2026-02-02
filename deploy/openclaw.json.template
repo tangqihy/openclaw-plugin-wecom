@@ -79,10 +79,10 @@
     }
   },
   "channels": {
-    "wxwork": {
+    "wecom": {
       "enabled": true,
-      "token": "${WXWORK_TOKEN}",
-      "encodingAesKey": "${WXWORK_ENCODING_AES_KEY}",
+      "token": "${WECOM_TOKEN}",
+      "encodingAesKey": "${WECOM_ENCODING_AES_KEY}",
       "commands": {
         "enabled": true,
         "allowlist": ["/new", "/status", "/help", "/compact"]

@@ -81,14 +81,14 @@ if [ "$PLUGIN_INSTALLED" = true ]; then
     echo "  插件已安装，使用完整配置..."
     if [ -f "${SCRIPT_DIR}/openclaw.json.template" ]; then
         generate_config "${SCRIPT_DIR}/openclaw.json.template" "${OPENCLAW_DATA_DIR}/openclaw.json"
-        echo "  ✓ 已生成完整配置（含 wxwork）"
+        echo "  ✓ 已生成完整配置（含 wecom）"
     fi
 else
     # 插件未安装，使用基础配置
     echo "  插件未安装，使用基础配置..."
     if [ -f "${SCRIPT_DIR}/openclaw.json.base" ]; then
         generate_config "${SCRIPT_DIR}/openclaw.json.base" "${OPENCLAW_DATA_DIR}/openclaw.json"
-        echo "  ✓ 已生成基础配置（不含 wxwork）"
+        echo "  ✓ 已生成基础配置（不含 wecom）"
     fi
 fi
 echo ""
@@ -125,7 +125,7 @@ if [ "$PLUGIN_INSTALLED" = false ]; then
     echo -e "${GREEN}8️⃣  更新配置文件...${NC}"
     if [ -f "${SCRIPT_DIR}/openclaw.json.template" ]; then
         generate_config "${SCRIPT_DIR}/openclaw.json.template" "${OPENCLAW_DATA_DIR}/openclaw.json"
-        echo "  ✓ 已更新为完整配置（含 wxwork）"
+        echo "  ✓ 已更新为完整配置（含 wecom）"
     fi
     echo ""
     
@@ -146,12 +146,12 @@ echo -e "${GREEN}🔟  验证部署...${NC}"
 docker compose ps
 echo ""
 
-# 检查日志确认 wxwork 加载
-echo "检查 wxwork 插件状态..."
-if docker logs openclaw-gateway 2>&1 | tail -20 | grep -q "WxWork"; then
-    echo -e "${GREEN}✓ WxWork 插件已加载${NC}"
+# 检查日志确认 wecom 加载
+echo "检查 wecom 插件状态..."
+if docker logs openclaw-gateway 2>&1 | tail -20 | grep -q "WeCom"; then
+    echo -e "${GREEN}✓ WeCom 插件已加载${NC}"
 else
-    echo -e "${YELLOW}⚠ 未检测到 WxWork 插件日志，请检查配置${NC}"
+    echo -e "${YELLOW}⚠ 未检测到 WeCom 插件日志，请检查配置${NC}"
 fi
 echo ""
 

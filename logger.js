@@ -1,9 +1,9 @@
 /**
- * Structured logging for WxWork plugin
+ * Structured logging for WeCom plugin
  */
 export class Logger {
     prefix;
-    constructor(prefix = "[wxwork]") {
+    constructor(prefix = "[wecom]") {
         this.prefix = prefix;
     }
     log(level, message, context) {

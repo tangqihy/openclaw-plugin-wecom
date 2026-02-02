@@ -1,5 +1,5 @@
 /**
- * Utility functions and helpers for WxWork plugin
+ * Utility functions and helpers for WeCom plugin
  */
 export class TTLCache {
     options;
@@ -137,7 +137,7 @@ export class MessageDeduplicator {
         this.seen.set(msgId, true);
     }
 }
-export function parseWxWorkError(errcode, errmsg) {
+export function parseWecomError(errcode, errmsg) {
     // Reference: https://developer.work.weixin.qq.com/document/path/96213
     switch (errcode) {
         case -1:
@@ -198,7 +198,7 @@ export function parseWxWorkError(errcode, errmsg) {
     }
 }
 export function shouldRetryError(errcode) {
-    const info = parseWxWorkError(errcode, "");
+    const info = parseWecomError(errcode, "");
     return info.retryable;
 }
 // ============================================================================

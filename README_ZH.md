@@ -83,11 +83,11 @@ npm install openclaw-plugin-wecom
 {
   "plugins": {
     "entries": {
-      "openclaw-plugin-wecom": { "enabled": true }
+      "wecom": { "enabled": true }
     }
   },
   "channels": {
-    "wxwork": {
+    "wecom": {
       "enabled": true,
       "token": "你的 Token",
       "encodingAesKey": "你的 EncodingAESKey"
@@ -99,7 +99,7 @@ npm install openclaw-plugin-wecom
 ### 企业微信后台设置
 
 1. 在企业微信管理后台创建一个"智能机器人"。
-2. 将机器人的"接收消息配置"中的 URL 设置为你的服务地址（例如：`https://your-domain.com/webhooks/wxwork`）。
+2. 将机器人的"接收消息配置"中的 URL 设置为你的服务地址（例如：`https://your-domain.com/webhooks/wecom`）。
 3. 填入对应的 Token 和 EncodingAESKey。
 
 ## 📂 项目结构
@@ -127,13 +127,13 @@ openclaw-plugin-wecom/
 OpenClaw 会通过解析 `SessionKey` 来决定本次消息由哪个 Agent 处理。本插件实现"按人/按群隔离"：
 
 1. 企业微信消息到达后，插件生成确定性的 `agentId`：
-   - 私聊：`wxwork-dm-<userId>`
-   - 群聊：`wxwork-group-<chatId>`
+   - 私聊：`wecom-dm-<userId>`
+   - 群聊：`wecom-group-<chatId>`
 2. OpenClaw 自动创建/复用对应的 Agent 工作区。
 
 ### 配置选项
 
-配置在 `channels.wxwork` 下：
+配置在 `channels.wecom` 下：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
@@ -147,7 +147,7 @@ OpenClaw 会通过解析 `SessionKey` 来决定本次消息由哪个 Agent 处�
 ```json
 {
   "channels": {
-    "wxwork": {
+    "wecom": {
       "dynamicAgents": { "enabled": false }
     }
   }
@@ -163,7 +163,7 @@ OpenClaw 会通过解析 `SessionKey` 来决定本次消息由哪个 Agent 处�
 ```json
 {
   "channels": {
-    "wxwork": {
+    "wecom": {
       "commands": {
         "enabled": true,
         "allowlist": ["/new", "/status", "/help", "/compact"]

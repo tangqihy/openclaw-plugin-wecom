@@ -83,11 +83,11 @@ Then add to your OpenClaw configuration:
 {
   "plugins": {
     "entries": {
-      "openclaw-plugin-wecom": { "enabled": true }
+      "wecom": { "enabled": true }
     }
   },
   "channels": {
-    "wxwork": {
+    "wecom": {
       "enabled": true,
       "token": "Your Token",
       "encodingAesKey": "Your EncodingAESKey"
@@ -99,7 +99,7 @@ Then add to your OpenClaw configuration:
 ### WeCom Backend Setup
 
 1. Create an "Intelligent Bot" in WeCom Admin Console.
-2. Set the "Receive Message" URL to your service address (e.g., `https://your-domain.com/webhooks/wxwork`).
+2. Set the "Receive Message" URL to your service address (e.g., `https://your-domain.com/webhooks/wecom`).
 3. Enter the corresponding Token and EncodingAESKey.
 
 ## 📂 Project Structure
@@ -127,13 +127,13 @@ openclaw-plugin-wecom/
 The plugin implements per-user/per-group isolation:
 
 1. On message arrival, generates a deterministic `agentId`:
-   - DM: `wxwork-dm-<userId>`
-   - Group: `wxwork-group-<chatId>`
+   - DM: `wecom-dm-<userId>`
+   - Group: `wecom-group-<chatId>`
 2. OpenClaw automatically creates/reuses the corresponding Agent workspace.
 
 ### Configuration Options
 
-Under `channels.wxwork`:
+Under `channels.wecom`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -147,7 +147,7 @@ To route all messages to the default Agent:
 ```json
 {
   "channels": {
-    "wxwork": {
+    "wecom": {
       "dynamicAgents": { "enabled": false }
     }
   }
@@ -163,7 +163,7 @@ To prevent regular users from executing sensitive Gateway management commands vi
 ```json
 {
   "channels": {
-    "wxwork": {
+    "wecom": {
       "commands": {
         "enabled": true,
         "allowlist": ["/new", "/status", "/help", "/compact"]
