@@ -1,12 +1,30 @@
 /**
  * Structured logging for WeCom plugin
  */
+const LEVELS = {
+    debug: 10,
+    info: 20,
+    warn: 30,
+    error: 40,
+    silent: 100,
+};
+
+function getEnvLogLevel() {
+    const raw = (process.env.WECOM_LOG_LEVEL || process.env.LOG_LEVEL || "info").toLowerCase();
+    return Object.prototype.hasOwnProperty.call(LEVELS, raw) ? raw : "info";
+}
+
 export class Logger {
     prefix;
-    constructor(prefix = "[wecom]") {
+    level;
+    constructor(prefix = "[wecom]", level = getEnvLogLevel()) {
         this.prefix = prefix;
+        this.level = level;
     }
     log(level, message, context) {
+        if (LEVELS[level] < LEVELS[this.level]) {
+            return;
+        }
         const timestamp = new Date().toISOString();
         const contextStr = context ? ` ${JSON.stringify(context)}` : "";
         const logMessage = `${timestamp} ${level.toUpperCase()} ${this.prefix} ${message}${contextStr}`;
@@ -38,7 +56,7 @@ export class Logger {
         this.log("error", message, context);
     }
     child(subPrefix) {
-        return new Logger(`${this.prefix}:${subPrefix}`);
+        return new Logger(`${this.prefix}:${subPrefix}`, this.level);
     }
 }
 // Default logger instance

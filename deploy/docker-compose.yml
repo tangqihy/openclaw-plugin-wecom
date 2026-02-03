@@ -25,6 +25,8 @@ services:
       # 企业微信配置
       WECOM_TOKEN: ${WECOM_TOKEN}
       WECOM_ENCODING_AES_KEY: ${WECOM_ENCODING_AES_KEY}
+      # WeCom 插件日志级别: debug | info | warn | error | silent
+      WECOM_LOG_LEVEL: ${WECOM_LOG_LEVEL:-info}
 
       # Gateway 配置
       GATEWAY_PORT: ${GATEWAY_PORT:-18789}
