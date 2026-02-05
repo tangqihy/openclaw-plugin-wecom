@@ -68,8 +68,11 @@ irm https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/script
 The update script will automatically:
 1. Detect the installed plugin directory
 2. Backup the current version
-3. Download and replace with the latest code
-4. Restart OpenClaw Gateway to apply changes
+3. Use `git clone/pull` to fetch the latest source code
+4. Replace plugin files
+5. Restart OpenClaw Gateway to apply changes
+
+> **Note**: Requires [Git](https://git-scm.com/) to be installed. Source code is cached in `~/.openclaw/plugin-sources/`, subsequent updates use `git pull` for incremental updates.
 
 ## ⚙️ Configuration
 

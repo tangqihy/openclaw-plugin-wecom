@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # OpenClaw WeCom Plugin 本地更新脚本
-# 用于从 GitHub fork 拉取最新代码并替换已安装的插件
+# 使用 git clone/pull 从 GitHub 拉取源码并更新插件
 #
 # 使用方法:
 #   curl -sSL https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.sh | bash
@@ -15,12 +15,15 @@ set -e
 # 配置
 # ============================================================================
 
-# GitHub 仓库地址 (修改为你自己的 fork)
-GITHUB_REPO="tangqihy/openclaw-plugin-wecom"
+# GitHub 仓库地址
+GITHUB_REPO="https://github.com/tangqihy/openclaw-plugin-wecom.git"
 GITHUB_BRANCH="main"
 
 # 插件名称
 PLUGIN_NAME="openclaw-plugin-wecom"
+
+# 本地源码缓存目录
+SOURCE_CACHE_DIR="$HOME/.openclaw/plugin-sources/$PLUGIN_NAME"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -86,6 +89,12 @@ main() {
     echo "=========================================="
     echo ""
 
+    # 检查 git 是否可用
+    if ! command -v git &> /dev/null; then
+        log_error "需要 git 来克隆/更新源码"
+        exit 1
+    fi
+
     # 1. 检测插件目录
     log_info "检测已安装的插件目录..."
     
@@ -105,39 +114,29 @@ main() {
     cp -r "$PLUGIN_DIR" "$BACKUP_DIR"
     log_success "备份完成: $BACKUP_DIR"
 
-    # 3. 下载最新代码
-    log_info "从 GitHub 下载最新代码..."
-    TEMP_DIR=$(mktemp -d)
+    # 3. 获取/更新源码
+    log_info "获取最新源码..."
     
-    # 下载 zip 并解压
-    DOWNLOAD_URL="https://github.com/$GITHUB_REPO/archive/refs/heads/$GITHUB_BRANCH.zip"
+    mkdir -p "$(dirname "$SOURCE_CACHE_DIR")"
     
-    if command -v curl &> /dev/null; then
-        curl -sSL "$DOWNLOAD_URL" -o "$TEMP_DIR/plugin.zip"
-    elif command -v wget &> /dev/null; then
-        wget -q "$DOWNLOAD_URL" -O "$TEMP_DIR/plugin.zip"
+    if [ -d "$SOURCE_CACHE_DIR/.git" ]; then
+        # 已有本地仓库，执行 pull
+        log_info "更新本地源码缓存..."
+        cd "$SOURCE_CACHE_DIR"
+        git fetch origin "$GITHUB_BRANCH"
+        git reset --hard "origin/$GITHUB_BRANCH"
+        git clean -fd
     else
-        log_error "需要 curl 或 wget 来下载文件"
-        exit 1
+        # 没有本地仓库，执行 clone
+        log_info "克隆源码仓库..."
+        rm -rf "$SOURCE_CACHE_DIR"
+        git clone --depth 1 --branch "$GITHUB_BRANCH" "$GITHUB_REPO" "$SOURCE_CACHE_DIR"
+        cd "$SOURCE_CACHE_DIR"
     fi
     
-    # 解压
-    if command -v unzip &> /dev/null; then
-        unzip -q "$TEMP_DIR/plugin.zip" -d "$TEMP_DIR"
-    else
-        log_error "需要 unzip 来解压文件"
-        exit 1
-    fi
-    
-    # 找到解压后的目录
-    EXTRACTED_DIR=$(find "$TEMP_DIR" -maxdepth 1 -type d -name "openclaw-plugin-wecom-*" | head -1)
-    
-    if [ -z "$EXTRACTED_DIR" ]; then
-        log_error "解压失败，未找到插件目录"
-        exit 1
-    fi
-    
-    log_success "下载完成"
+    # 获取版本信息
+    COMMIT_HASH=$(git rev-parse --short HEAD)
+    log_success "源码获取完成 (commit: $COMMIT_HASH)"
 
     # 4. 更新插件文件
     log_info "更新插件文件..."
@@ -153,6 +152,7 @@ main() {
         "client.js"
         "crypto.js"
         "dynamic-agent.js"
+        "image-processor.js"
         "logger.js"
         "utils.js"
         "package.json"
@@ -160,31 +160,21 @@ main() {
     )
     
     for file in "${FILES_TO_UPDATE[@]}"; do
-        if [ -f "$EXTRACTED_DIR/$file" ]; then
-            cp "$EXTRACTED_DIR/$file" "$PLUGIN_DIR/$file"
+        if [ -f "$SOURCE_CACHE_DIR/$file" ]; then
+            cp "$SOURCE_CACHE_DIR/$file" "$PLUGIN_DIR/$file"
             log_info "  更新: $file"
         fi
     done
     
-    # 复制可能存在的其他文件
-    if [ -f "$EXTRACTED_DIR/image-processor.js" ]; then
-        cp "$EXTRACTED_DIR/image-processor.js" "$PLUGIN_DIR/"
-        log_info "  更新: image-processor.js"
-    fi
-    
     log_success "插件文件更新完成"
 
-    # 5. 清理临时文件
-    rm -rf "$TEMP_DIR"
-    log_info "清理临时文件完成"
-
-    # 6. 显示版本信息
+    # 5. 显示版本信息
     if [ -f "$PLUGIN_DIR/package.json" ]; then
         NEW_VERSION=$(grep -o '"version": "[^"]*"' "$PLUGIN_DIR/package.json" | cut -d'"' -f4)
-        log_success "插件已更新到版本: $NEW_VERSION"
+        log_success "插件已更新到版本: $NEW_VERSION (commit: $COMMIT_HASH)"
     fi
 
-    # 7. 重启 OpenClaw Gateway
+    # 6. 重启 OpenClaw Gateway
     echo ""
     log_info "重启 OpenClaw Gateway 以应用更改..."
     
@@ -200,6 +190,8 @@ main() {
     echo "=========================================="
     log_success "插件更新完成！"
     echo "=========================================="
+    echo ""
+    echo "源码缓存位置: $SOURCE_CACHE_DIR"
     echo ""
     echo "如需回滚，请执行:"
     echo "    rm -rf $PLUGIN_DIR"

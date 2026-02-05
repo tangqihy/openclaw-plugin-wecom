@@ -68,8 +68,11 @@ irm https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/script
 更新脚本会自动：
 1. 检测已安装的插件目录
 2. 备份当前版本
-3. 下载并替换最新代码
-4. 重启 OpenClaw Gateway 使更改生效
+3. 使用 `git clone/pull` 获取最新源码
+4. 替换插件文件
+5. 重启 OpenClaw Gateway 使更改生效
+
+> **注意**：需要预先安装 [Git](https://git-scm.com/)。源码会缓存在 `~/.openclaw/plugin-sources/` 目录，后续更新会使用 `git pull` 增量更新。
 
 ## ⚙️ 配置
 
