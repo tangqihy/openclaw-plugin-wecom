@@ -1,4 +1,5 @@
 import { logger } from "./logger.js";
+import { prepareImageForMsgItem } from "./image-processor.js";
 
 /**
  * 流式消息状态管理器
@@ -6,7 +7,7 @@ import { logger } from "./logger.js";
  */
 class StreamManager {
     constructor() {
-        // streamId -> { content: string, finished: boolean, updatedAt: number, feedbackId: string|null, msgItem: Array }
+        // streamId -> { content: string, finished: boolean, updatedAt: number, feedbackId: string|null, msgItem: Array, pendingImages: Array }
         this.streams = new Map();
         this._cleanupInterval = null;
     }
@@ -42,6 +43,7 @@ class StreamManager {
             updatedAt: Date.now(),
             feedbackId: options.feedbackId || null,  // 用户反馈追踪
             msgItem: [],  // 图文混排消息列表
+            pendingImages: [],  // 待处理的图片路径列表
         });
         return streamId;
     }
@@ -117,9 +119,101 @@ class StreamManager {
     }
 
     /**
-     * 标记流为完成状态
+     * Queue image for inclusion when stream finishes
+     * @param {string} streamId - 流ID
+     * @param {string} imagePath - 图片绝对路径
+     * @returns {boolean} 是否成功队列
      */
-    finishStream(streamId) {
+    queueImage(streamId, imagePath) {
+        this.startCleanup();
+        const stream = this.streams.get(streamId);
+        if (!stream) {
+            logger.warn("Stream not found for queueImage", { streamId });
+            return false;
+        }
+
+        stream.pendingImages.push({
+            path: imagePath,
+            queuedAt: Date.now()
+        });
+
+        logger.debug("Image queued for stream", {
+            streamId,
+            imagePath,
+            totalQueued: stream.pendingImages.length
+        });
+
+        return true;
+    }
+
+    /**
+     * Process all pending images and build msgItem array
+     * @param {string} streamId - 流ID
+     * @returns {Promise<Array>} msg_item 数组
+     */
+    async processPendingImages(streamId) {
+        const stream = this.streams.get(streamId);
+        if (!stream || stream.pendingImages.length === 0) {
+            return [];
+        }
+
+        logger.debug("Processing pending images", {
+            streamId,
+            count: stream.pendingImages.length
+        });
+
+        const msgItems = [];
+
+        for (const img of stream.pendingImages) {
+            try {
+                // Limit to 10 images per WeCom API spec
+                if (msgItems.length >= 10) {
+                    logger.warn("Stream exceeded 10 image limit, truncating", {
+                        streamId,
+                        total: stream.pendingImages.length,
+                        processed: msgItems.length
+                    });
+                    break;
+                }
+
+                const processed = await prepareImageForMsgItem(img.path);
+                msgItems.push({
+                    msgtype: "image",
+                    image: {
+                        base64: processed.base64,
+                        md5: processed.md5
+                    }
+                });
+
+                logger.debug("Image processed successfully", {
+                    streamId,
+                    imagePath: img.path,
+                    format: processed.format,
+                    size: processed.size
+                });
+            } catch (error) {
+                logger.error("Failed to process image for stream", {
+                    streamId,
+                    imagePath: img.path,
+                    error: error.message
+                });
+                // Continue processing other images even if one fails
+            }
+        }
+
+        logger.info("Completed processing images for stream", {
+            streamId,
+            processed: msgItems.length,
+            pending: stream.pendingImages.length
+        });
+
+        return msgItems;
+    }
+
+    /**
+     * 标记流为完成状态（异步，处理待发送的图片）
+     */
+    async finishStream(streamId) {
         this.startCleanup();
         const stream = this.streams.get(streamId);
         if (!stream) {
@@ -127,12 +221,18 @@ class StreamManager {
             return false;
         }
 
+        // Process pending images before finishing
+        if (stream.pendingImages.length > 0) {
+            stream.msgItem = await this.processPendingImages(streamId);
+        }
+
         stream.finished = true;
         stream.updatedAt = Date.now();
 
         logger.info("Stream finished", {
             streamId,
-            contentLength: stream.content.length
+            contentLength: stream.content.length,
+            imageCount: stream.msgItem.length
         });
 
         return true;

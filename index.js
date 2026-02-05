@@ -184,7 +184,7 @@ const wecomChannelPlugin = {
     chatTypes: ["direct", "group"],  // 支持私聊和群聊
     reactions: false,
     threads: false,
-    media: false,
+    media: true,  // Supports image sending via base64 encoding
     nativeCommands: false,
     blockStreaming: true, // WeCom AI Bot uses stream response format
   },
@@ -264,8 +264,60 @@ const wecomChannelPlugin = {
       const streamId = activeStreams.get(userId);
 
       if (streamId && streamManager.hasStream(streamId)) {
+        // Check if mediaUrl is a local path (sandbox: prefix or absolute path)
+        const isLocalPath = mediaUrl.startsWith("sandbox:") || mediaUrl.startsWith("/");
+
+        if (isLocalPath) {
+          // Convert sandbox: URLs to absolute paths
+          // Support both sandbox:/ and sandbox:// formats
+          const absolutePath = mediaUrl
+            .replace(/^sandbox:\/\//, "")
+            .replace(/^sandbox:\//, "");
+
+          logger.debug("Queueing local image for stream", {
+            userId,
+            streamId,
+            mediaUrl,
+            absolutePath
+          });
+
+          // Queue the image for processing when stream finishes
+          const queued = streamManager.queueImage(streamId, absolutePath);
+
+          if (queued) {
+            // Append text content to stream (without markdown image)
+            if (text) {
+              const stream = streamManager.getStream(streamId);
+              const separator = stream && stream.content.length > 0 ? "\n\n" : "";
+              streamManager.appendStream(streamId, separator + text);
+            }
+
+            // Append placeholder indicating image will follow
+            const imagePlaceholder = "\n\n[图片]";
+            streamManager.appendStream(streamId, imagePlaceholder);
+
+            return {
+              channel: "wecom",
+              messageId: `msg_stream_img_${Date.now()}`,
+            };
+          } else {
+            logger.warn("Failed to queue image, falling back to markdown", {
+              userId,
+              streamId,
+              mediaUrl
+            });
+            // Fallback to old behavior
+          }
+        }
+
+        // OLD BEHAVIOR: For external URLs or if queueing failed, use markdown
         const content = text ? `${text}\n\n![image](${mediaUrl})` : `![image](${mediaUrl})`;
-        logger.debug("Appending outbound media to stream", { userId, streamId, mediaUrl });
+        logger.debug("Appending outbound media to stream (markdown)", {
+          userId,
+          streamId,
+          mediaUrl
+        });
+
         // 使用 appendStream 追加内容
         const stream = streamManager.getStream(streamId);
         const separator = stream && stream.content.length > 0 ? "\n\n" : "";
@@ -412,10 +464,10 @@ async function wecomHttpHandler(req, res) {
         nonce,
         account: target.account,
         config: target.config,
-      }).catch((err) => {
+      }).catch(async (err) => {
         logger.error("WeCom message processing failed", { error: err.message });
         // 即使失败也要标记流为完成
-        streamManager.finishStream(streamId);
+        await streamManager.finishStream(streamId);
       });
 
       return true;
@@ -450,7 +502,11 @@ async function wecomHttpHandler(req, res) {
         stream.content,
         stream.finished,
         timestamp,
-        nonce
+        nonce,
+        // Pass msgItem when stream is finished and has images
+        stream.finished && stream.msgItem.length > 0
+          ? { msgItem: stream.msgItem }
+          : {}
       );
 
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -495,7 +551,7 @@ async function wecomHttpHandler(req, res) {
         const streamId = `welcome_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         streamManager.createStream(streamId);
         streamManager.appendStream(streamId, welcomeMessage);
-        streamManager.finishStream(streamId);
+        await streamManager.finishStream(streamId);
 
         const streamResponse = webhook.buildStreamResponse(
           streamId,
@@ -592,7 +648,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
     // 通过流式响应返回拦截消息
     if (streamId) {
       streamManager.appendStream(streamId, cmdConfig.blockMessage);
-      streamManager.finishStream(streamId);
+      await streamManager.finishStream(streamId);
       activeStreams.delete(streamKey);
     }
     return;
@@ -713,15 +769,15 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
 
         // 如果是最终回复,标记流为完成
         if (streamId && info.kind === "final") {
-          streamManager.finishStream(streamId);
+          await streamManager.finishStream(streamId);
           logger.info("WeCom stream finished", { streamId });
         }
       },
-      onError: (err, info) => {
+      onError: async (err, info) => {
         logger.error("WeCom reply failed", { error: err.message, kind: info.kind });
         // 发生错误时也标记流为完成
         if (streamId) {
-          streamManager.finishStream(streamId);
+          await streamManager.finishStream(streamId);
         }
       },
     },
@@ -729,7 +785,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
 
   // 确保在dispatch完成后标记流为完成（兜底机制）
   if (streamId) {
-    streamManager.finishStream(streamId);
+    await streamManager.finishStream(streamId);
     activeStreams.delete(streamKey);  // 清理活跃流映射
     logger.info("WeCom stream finished (dispatch complete)", { streamId });
   }
