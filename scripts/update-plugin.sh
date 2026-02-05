@@ -55,6 +55,8 @@ log_error() {
 detect_plugin_dir() {
     # 常见的插件安装位置
     local possible_dirs=(
+        "$HOME/.openclaw/extensions/$PLUGIN_NAME"
+        "/root/.openclaw/extensions/$PLUGIN_NAME"
         "$HOME/.openclaw/plugins/node_modules/$PLUGIN_NAME"
         "$HOME/.openclaw/node_modules/$PLUGIN_NAME"
         "/usr/local/lib/node_modules/$PLUGIN_NAME"
@@ -113,8 +115,8 @@ main() {
         log_info "  2. 或手动指定目录: PLUGIN_DIR=/path/to/plugin $0"
         log_info ""
         log_info "常见插件位置："
+        log_info "  - ~/.openclaw/extensions/$PLUGIN_NAME"
         log_info "  - ~/.openclaw/plugins/node_modules/$PLUGIN_NAME"
-        log_info "  - ~/.openclaw/node_modules/$PLUGIN_NAME"
         exit 1
     fi
     

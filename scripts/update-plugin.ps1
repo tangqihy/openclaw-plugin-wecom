@@ -49,6 +49,7 @@ function Write-Err($msg) {
 
 function Find-PluginDir {
     $possibleDirs = @(
+        "$env:USERPROFILE\.openclaw\extensions\$PLUGIN_NAME",
         "$env:USERPROFILE\.openclaw\plugins\node_modules\$PLUGIN_NAME",
         "$env:USERPROFILE\.openclaw\node_modules\$PLUGIN_NAME",
         "$env:APPDATA\npm\node_modules\$PLUGIN_NAME",
@@ -117,8 +118,8 @@ function Main {
         Write-Host "  2. 或手动指定目录: `$env:PLUGIN_DIR='C:\path\to\plugin'; .\update-plugin.ps1"
         Write-Host ""
         Write-Info "常见插件位置："
+        Write-Host "  - $env:USERPROFILE\.openclaw\extensions\$PLUGIN_NAME"
         Write-Host "  - $env:USERPROFILE\.openclaw\plugins\node_modules\$PLUGIN_NAME"
-        Write-Host "  - $env:USERPROFILE\.openclaw\node_modules\$PLUGIN_NAME"
         exit 1
     }
     
