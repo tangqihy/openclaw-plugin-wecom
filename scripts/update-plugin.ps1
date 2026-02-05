@@ -77,6 +77,10 @@ function Find-PluginDir {
 # ============================================================================
 
 function Main {
+    param(
+        [string]$PluginDirOverride = $env:PLUGIN_DIR
+    )
+
     Write-Host ""
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host "  OpenClaw WeCom Plugin 本地更新脚本" -ForegroundColor Cyan
@@ -92,14 +96,29 @@ function Main {
         exit 1
     }
 
-    # 1. 检测插件目录
+    # 1. 检测插件目录（支持通过环境变量或参数指定）
     Write-Info "检测已安装的插件目录..."
     
-    $pluginDir = Find-PluginDir
+    $pluginDir = $null
     
-    if (-not $pluginDir) {
+    # 如果用户指定了目录
+    if ($PluginDirOverride -and (Test-Path $PluginDirOverride)) {
+        Write-Info "使用指定的插件目录: $PluginDirOverride"
+        $pluginDir = $PluginDirOverride
+    } else {
+        $pluginDir = Find-PluginDir
+    }
+    
+    if (-not $pluginDir -or -not (Test-Path $pluginDir)) {
         Write-Err "未找到已安装的 $PLUGIN_NAME 插件"
-        Write-Info "请先使用 'openclaw plugins install $PLUGIN_NAME' 安装插件"
+        Write-Host ""
+        Write-Info "解决方法："
+        Write-Host "  1. 先安装插件: openclaw plugins install $PLUGIN_NAME"
+        Write-Host "  2. 或手动指定目录: `$env:PLUGIN_DIR='C:\path\to\plugin'; .\update-plugin.ps1"
+        Write-Host ""
+        Write-Info "常见插件位置："
+        Write-Host "  - $env:USERPROFILE\.openclaw\plugins\node_modules\$PLUGIN_NAME"
+        Write-Host "  - $env:USERPROFILE\.openclaw\node_modules\$PLUGIN_NAME"
         exit 1
     }
     

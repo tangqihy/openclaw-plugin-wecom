@@ -95,14 +95,26 @@ main() {
         exit 1
     fi
 
-    # 1. 检测插件目录
+    # 1. 检测插件目录（支持通过环境变量指定）
     log_info "检测已安装的插件目录..."
     
-    PLUGIN_DIR=$(detect_plugin_dir)
+    # 如果用户指定了 PLUGIN_DIR 环境变量，直接使用
+    if [ -n "${PLUGIN_DIR:-}" ] && [ -d "$PLUGIN_DIR" ]; then
+        log_info "使用指定的插件目录: $PLUGIN_DIR"
+    else
+        PLUGIN_DIR=$(detect_plugin_dir || echo "")
+    fi
     
-    if [ -z "$PLUGIN_DIR" ]; then
+    if [ -z "$PLUGIN_DIR" ] || [ ! -d "$PLUGIN_DIR" ]; then
         log_error "未找到已安装的 $PLUGIN_NAME 插件"
-        log_info "请先使用 'openclaw plugins install $PLUGIN_NAME' 安装插件"
+        log_info ""
+        log_info "解决方法："
+        log_info "  1. 先安装插件: openclaw plugins install $PLUGIN_NAME"
+        log_info "  2. 或手动指定目录: PLUGIN_DIR=/path/to/plugin $0"
+        log_info ""
+        log_info "常见插件位置："
+        log_info "  - ~/.openclaw/plugins/node_modules/$PLUGIN_NAME"
+        log_info "  - ~/.openclaw/node_modules/$PLUGIN_NAME"
         exit 1
     fi
     
