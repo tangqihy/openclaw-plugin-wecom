@@ -1,6 +1,9 @@
 import { WecomWebhook } from "./webhook.js";
 import { logger } from "./logger.js";
 import { streamManager } from "./stream-manager.js";
+import { heartbeatManager } from "./heartbeat-manager.js";
+import { messageQueue } from "./message-queue.js";
+import { preprocessMessage, getMediaConfig } from "./media-handler.js";
 import {
   generateAgentId,
   getDynamicAgentConfig,
@@ -431,11 +434,11 @@ async function wecomHttpHandler(req, res) {
       return true;
     }
 
-    // Handle text message
+    // Handle message (text, image, voice)
     if (result.message) {
       const msg = result.message;
       const { timestamp, nonce } = result.query;
-      const content = (msg.content || "").trim();
+      const msgType = msg.msgType || "text";
 
       // 统一使用流式回复处理所有消息（包括命令）
       // 企业微信 AI Bot 的 response_url 只能使用一次，
@@ -455,19 +458,29 @@ async function wecomHttpHandler(req, res) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(streamResponse);
 
-      logger.info("Stream initiated", { streamId, from: msg.fromUser, isCommand: content.startsWith("/") });
-      // 异步处理消息 - 调用AI并更新流内容
-      processInboundMessage({
+      const content = msg.content || msg.imageUrl || msg.voiceUrl || "";
+      logger.info("Stream initiated", { 
+        streamId, 
+        from: msg.fromUser, 
+        msgType,
+        isCommand: msgType === "text" && content.startsWith("/") 
+      });
+
+      // 异步处理消息 - 使用消息队列管理
+      const streamKey = msg.chatType === "group" ? msg.chatId : msg.fromUser;
+      
+      scheduleMessageProcessing({
         message: msg,
         streamId,
+        streamKey,
         timestamp,
         nonce,
         account: target.account,
         config: target.config,
       }).catch(async (err) => {
-        logger.error("WeCom message processing failed", { error: err.message });
-        // 即使失败也要标记流为完成
+        logger.error("WeCom message scheduling failed", { error: err.message });
         await streamManager.finishStream(streamId);
+        heartbeatManager.stop(streamId);
       });
 
       return true;
@@ -583,6 +596,62 @@ async function wecomHttpHandler(req, res) {
 }
 
 // =============================================================================
+// Message Scheduling with Queue Support
+// =============================================================================
+
+async function scheduleMessageProcessing({ message, streamId, streamKey, timestamp, nonce, account, config }) {
+  // 启动心跳机制
+  const stopHeartbeat = heartbeatManager.start(streamId, {
+    onTimeout: (sid) => {
+      logger.warn("Message processing timeout", { streamId: sid });
+      // 超时时更新流内容并完成
+      streamManager.updateStream(sid, 
+        "⚠️ 处理超时，请稍后重试。如果问题持续，请尝试简化您的问题。", 
+        true
+      );
+      streamManager.finishStream(sid);
+      messageQueue.reset(streamKey);
+    },
+  });
+
+  // 通过消息队列调度
+  const queueResult = await messageQueue.enqueue(
+    streamKey,
+    { message, streamId, timestamp, nonce, account, config },
+    async (queuedMsg) => {
+      try {
+        await processInboundMessage({
+          message: queuedMsg.message,
+          streamId: queuedMsg.streamId,
+          timestamp: queuedMsg.timestamp,
+          nonce: queuedMsg.nonce,
+          account: queuedMsg.account,
+          config: queuedMsg.config,
+        });
+      } finally {
+        // 停止心跳
+        heartbeatManager.stop(queuedMsg.streamId);
+      }
+    }
+  );
+
+  // 如果队列已满，返回提示
+  if (queueResult.queueFull) {
+    streamManager.updateStream(streamId, messageQueue.getQueueFullMessage(), true);
+    streamManager.finishStream(streamId);
+    stopHeartbeat();
+    return;
+  }
+
+  // 如果消息被排队，通知用户
+  if (queueResult.queued) {
+    const waitingMsg = messageQueue.getWaitingMessage(queueResult.position);
+    streamManager.updateStream(streamId, waitingMsg, false);
+    logger.info("Message queued", { streamKey, position: queueResult.position, streamId });
+  }
+}
+
+// =============================================================================
 // Inbound Message Processing (triggers AI response)
 // =============================================================================
 
@@ -591,7 +660,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   const core = runtime.channel;
 
   const senderId = message.fromUser;
-  const rawContent = message.content || "";
+  const msgType = message.msgType || "text";
   const responseUrl = message.responseUrl;
   const chatType = message.chatType || "single";  // "single" 或 "group"
   const chatId = message.chatId || "";  // 群聊 ID
@@ -609,15 +678,43 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
     activeStreams.set(streamKey, streamId);
   }
 
+  // ========================================================================
+  // 预处理消息（支持文本、图片、语音）
+  // ========================================================================
+  let processedMessage;
+  try {
+    processedMessage = await preprocessMessage(message, config);
+  } catch (err) {
+    logger.error("Message preprocessing failed", { error: err.message, msgType });
+    streamManager.updateStream(streamId, "⚠️ 消息处理失败，请稍后重试。", true);
+    streamManager.finishStream(streamId);
+    return;
+  }
+
+  // 获取处理后的内容
+  let rawContent = processedMessage.content || "";
+  const isMultimodal = processedMessage.isMultimodal;
+  const mediaUrl = processedMessage.imageUrl || processedMessage.voiceUrl;
+
+  logger.debug("Message preprocessed", { 
+    msgType, 
+    contentPreview: rawContent.substring(0, 50),
+    isMultimodal,
+    hasMediaUrl: !!mediaUrl
+  });
+
   // 群聊消息检查：是否满足触发条件（@提及）
   let rawBody = rawContent;
-  if (isGroupChat) {
+  if (isGroupChat && msgType === "text") {
     if (!shouldTriggerGroupResponse(rawContent, config)) {
       logger.debug("WeCom: group message ignored (no mention)", { chatId, senderId });
+      streamManager.finishStream(streamId);
       return;
     }
     // 提取实际内容（移除 @提及）
     rawBody = extractGroupMessageContent(rawContent, config);
+  } else {
+    rawBody = rawContent;
   }
 
   const commandAuthorized = resolveWecomCommandAuthorized({
@@ -628,40 +725,47 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
 
   if (!rawBody.trim()) {
     logger.debug("WeCom: empty message, skipping");
+    streamManager.finishStream(streamId);
     return;
   }
 
   // ========================================================================
-  // 命令白名单检查
+  // 命令白名单检查（仅对文本消息）
   // ========================================================================
-  const commandCheck = checkCommandAllowlist(rawBody, config);
+  let commandCheck = { isCommand: false, allowed: true, command: null };
+  
+  if (msgType === "text") {
+    commandCheck = checkCommandAllowlist(rawBody, config);
 
-  if (commandCheck.isCommand && !commandCheck.allowed) {
-    // 命令不在白名单中，返回拒绝消息
-    const cmdConfig = getCommandConfig(config);
-    logger.warn("WeCom: blocked command", {
-      command: commandCheck.command,
-      from: senderId,
-      chatType: peerKind
-    });
+    if (commandCheck.isCommand && !commandCheck.allowed) {
+      // 命令不在白名单中，返回拒绝消息
+      const cmdConfig = getCommandConfig(config);
+      logger.warn("WeCom: blocked command", {
+        command: commandCheck.command,
+        from: senderId,
+        chatType: peerKind
+      });
 
-    // 通过流式响应返回拦截消息
-    if (streamId) {
-      streamManager.appendStream(streamId, cmdConfig.blockMessage);
-      await streamManager.finishStream(streamId);
-      activeStreams.delete(streamKey);
+      // 通过流式响应返回拦截消息
+      if (streamId) {
+        streamManager.updateStream(streamId, cmdConfig.blockMessage, true);
+        await streamManager.finishStream(streamId);
+        activeStreams.delete(streamKey);
+      }
+      return;
     }
-    return;
   }
 
   logger.info("WeCom processing message", {
     from: senderId,
     chatType: peerKind,
     peerId,
+    msgType,
     content: rawBody.substring(0, 50),
     streamId,
     isCommand: commandCheck.isCommand,
-    command: commandCheck.command
+    command: commandCheck.command,
+    isMultimodal,
   });
 
   // ========================================================================

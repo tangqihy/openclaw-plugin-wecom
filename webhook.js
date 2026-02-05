@@ -196,7 +196,16 @@ export class WecomWebhook {
             const msgId = data.msgid || `msg_${Date.now()}`;
             const fromUser = data.from?.userid || "";
             const responseUrl = data.response_url || "";
-            logger.info("Received image message", { fromUser, imageUrl });
+            const chatType = data.chattype || "single";
+            const chatId = data.chatid || "";
+
+            // Check for duplicates
+            if (this.deduplicator.isDuplicate(msgId)) {
+                logger.debug("Duplicate image message ignored", { msgId });
+                return null;
+            }
+
+            logger.info("Received image message", { fromUser, chatType, imageUrl: imageUrl?.substring(0, 50) });
 
             return {
                 message: {
@@ -204,6 +213,40 @@ export class WecomWebhook {
                     msgType: "image",
                     imageUrl,
                     fromUser,
+                    chatType,
+                    chatId,
+                    responseUrl,
+                },
+                query: { timestamp, nonce },
+            };
+        }
+        else if (msgtype === "voice") {
+            // 语音消息
+            const voiceUrl = data.voice?.url;
+            const mediaId = data.voice?.media_id;
+            const msgId = data.msgid || `msg_${Date.now()}`;
+            const fromUser = data.from?.userid || "";
+            const responseUrl = data.response_url || "";
+            const chatType = data.chattype || "single";
+            const chatId = data.chatid || "";
+
+            // Check for duplicates
+            if (this.deduplicator.isDuplicate(msgId)) {
+                logger.debug("Duplicate voice message ignored", { msgId });
+                return null;
+            }
+
+            logger.info("Received voice message", { fromUser, chatType, hasVoiceUrl: !!voiceUrl, hasMediaId: !!mediaId });
+
+            return {
+                message: {
+                    msgId,
+                    msgType: "voice",
+                    voiceUrl,
+                    mediaId,
+                    fromUser,
+                    chatType,
+                    chatId,
                     responseUrl,
                 },
                 query: { timestamp, nonce },
