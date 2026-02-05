@@ -1,6 +1,6 @@
 # OpenClaw 企业微信 (WeCom) AI 机器人插件
 
-[简体中文](https://github.com/sunnoy/openclaw-plugin-wecom/blob/main/README_ZH.md) | [English](https://github.com/sunnoy/openclaw-plugin-wecom/blob/main/README.md)
+[简体中文](https://github.com/tangqihy/openclaw-plugin-wecom/blob/main/README_ZH.md) | [English](https://github.com/tangqihy/openclaw-plugin-wecom/blob/main/README.md)
 
 `openclaw-plugin-wecom` 是一个专为 [OpenClaw](https://github.com/openclaw/openclaw) 框架开发的企业微信（WeCom）集成插件。它允许你将强大的 AI 能力无缝接入企业微信，并支持多项高级功能。
 
@@ -10,9 +10,12 @@
 - 🤖 **动态 Agent 管理**: 默认按"每个私聊用户 / 每个群聊"自动创建独立 Agent。每个 Agent 拥有独立的工作区与对话上下文，实现更强的数据隔离。
 - 👥 **群聊深度集成**: 支持群聊消息解析，可通过 @提及（At-mention）精准触发机器人响应。
 - 🖼️ **图片支持**: 自动将本地图片（截图、生成的图像）进行 base64 编码并发送，无需额外配置。
+- 🎤 **语音支持**: 支持接收和处理语音消息，可配置 ASR 转文字服务。
 - 🛠️ **指令增强**: 内置常用指令支持（如 `/new` 开启新会话、`/status` 查看状态等），并提供指令白名单配置功能。
 - 🔒 **安全与认证**: 完整支持企业微信消息加解密、URL 验证及发送者身份校验。
 - ⚡ **高性能异步处理**: 采用异步消息处理架构，确保即使在长耗时 AI 推理过程中，企业微信网关也能保持高响应性。
+- 💓 **心跳机制**: 自动发送"正在思考"提示，防止企业微信超时断开连接。
+- 📋 **消息队列**: 支持消息排队处理，避免并发消息冲突。
 
 ## 📋 前置要求
 
@@ -33,6 +36,40 @@ openclaw plugins install openclaw-plugin-wecom
 ```bash
 npm install openclaw-plugin-wecom
 ```
+
+### 方式三：从 GitHub Fork 安装（开发版）
+
+如果你想使用本 Fork 的最新开发版（包含心跳机制、消息队列、多媒体支持等增强功能）：
+
+**Linux/macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.sh | bash
+```
+
+**Windows PowerShell:**
+```powershell
+irm https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.ps1 | iex
+```
+
+## 🔄 更新插件
+
+如果你已经安装了插件，可以使用以下命令更新到最新版本：
+
+**Linux/macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.sh | bash
+```
+
+**Windows PowerShell:**
+```powershell
+irm https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.ps1 | iex
+```
+
+更新脚本会自动：
+1. 检测已安装的插件目录
+2. 备份当前版本
+3. 下载并替换最新代码
+4. 重启 OpenClaw Gateway 使更改生效
 
 ## ⚙️ 配置
 
@@ -135,6 +172,61 @@ npm install openclaw-plugin-wecom
   }
 }
 ```
+
+## 🖼️ 多媒体消息配置
+
+本 Fork 版本支持处理图片和语音消息：
+
+```json
+{
+  "channels": {
+    "wecom": {
+      "media": {
+        "imageHandler": "passthrough",
+        "voiceHandler": "passthrough",
+        "visionApiEndpoint": "https://api.openai.com/v1/chat/completions",
+        "visionApiKey": "sk-xxx",
+        "visionModel": "gpt-4-vision-preview",
+        "asrApiEndpoint": "https://api.openai.com/v1/audio/transcriptions",
+        "asrApiKey": "sk-xxx"
+      }
+    }
+  }
+}
+```
+
+### 图片处理模式
+
+| 模式 | 说明 |
+|------|------|
+| `passthrough` | 直接将图片 URL 传递给支持视觉的 AI（默认） |
+| `vision-ai` | 调用 Vision API 识别图片内容后转为文本 |
+| `none` | 不处理图片消息 |
+
+### 语音处理模式
+
+| 模式 | 说明 |
+|------|------|
+| `passthrough` | 告知 AI 收到语音消息（默认） |
+| `asr` | 调用 ASR API 转文字后发送给 AI |
+| `none` | 不处理语音消息 |
+
+## 💓 可靠性增强
+
+本 Fork 版本包含以下可靠性增强功能：
+
+### 心跳机制
+
+- 每 3 秒更新流内容，显示"正在思考..."等提示
+- 防止企业微信因长时间无响应而断开连接
+- 60 秒总超时保护，超时后返回友好提示
+
+### 消息队列
+
+- 每个用户/群聊独立队列
+- 最多排队 5 条消息
+- 当前消息处理中，新消息自动排队
+- 用户会收到排队位置提示
 
 ## 🛠️ 指令白名单
 
@@ -267,10 +359,17 @@ openclaw-plugin-wecom/
 ├── webhook.js            # 企业微信 HTTP 通信处理
 ├── dynamic-agent.js      # 动态 Agent 分配逻辑
 ├── stream-manager.js     # 流式回复管理
+├── heartbeat-manager.js  # 心跳机制管理 (新增)
+├── message-queue.js      # 消息队列管理 (新增)
+├── media-handler.js      # 多媒体消息处理 (新增)
+├── image-processor.js    # 图片编码处理
 ├── crypto.js             # 企业微信加密算法
 ├── client.js             # 客户端逻辑
 ├── logger.js             # 日志模块
 ├── utils.js              # 工具函数
+├── scripts/
+│   ├── update-plugin.sh  # Linux/macOS 更新脚本
+│   └── update-plugin.ps1 # Windows 更新脚本
 ├── package.json          # npm 包配置
 └── openclaw.plugin.json  # OpenClaw 插件清单
 ```

@@ -1,6 +1,6 @@
 # OpenClaw WeCom (Enterprise WeChat) AI Bot Plugin
 
-[English](https://github.com/sunnoy/openclaw-plugin-wecom/blob/main/README.md) | [简体中文](https://github.com/sunnoy/openclaw-plugin-wecom/blob/main/README_ZH.md)
+[English](https://github.com/tangqihy/openclaw-plugin-wecom/blob/main/README.md) | [简体中文](https://github.com/tangqihy/openclaw-plugin-wecom/blob/main/README_ZH.md)
 
 `openclaw-plugin-wecom` is an Enterprise WeChat (WeCom) integration plugin developed for the [OpenClaw](https://github.com/openclaw/openclaw) framework. It enables seamless AI capabilities in Enterprise WeChat with advanced features.
 
@@ -10,9 +10,12 @@
 - 🤖 **Dynamic Agent Management**: Automatically creates isolated agents per direct message user or group chat, with independent workspaces and conversation contexts.
 - 👥 **Deep Group Chat Integration**: Supports group message parsing with @mention triggering.
 - 🖼️ **Image Support**: Automatic base64 encoding and sending of local images (screenshots, generated images) without requiring additional configuration.
+- 🎤 **Voice Support**: Receive and process voice messages with configurable ASR service integration.
 - 🛠️ **Command Enhancement**: Built-in commands (e.g., `/new` for new sessions, `/status` for status) with allowlist configuration.
 - 🔒 **Security & Authentication**: Full support for WeCom message encryption/decryption, URL verification, and sender validation.
 - ⚡ **High-Performance Async Processing**: Asynchronous message architecture ensures responsive gateway even during long AI inference.
+- 💓 **Heartbeat Mechanism**: Automatic "thinking..." status updates to prevent WeCom timeout disconnections.
+- 📋 **Message Queue**: Queued message processing to avoid concurrent message conflicts.
 
 ## 📋 Prerequisites
 
@@ -33,6 +36,40 @@ openclaw plugins install openclaw-plugin-wecom
 ```bash
 npm install openclaw-plugin-wecom
 ```
+
+### Method 3: Install from GitHub Fork (Development Version)
+
+For the latest development version with heartbeat, message queue, and media support:
+
+**Linux/macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.sh | bash
+```
+
+**Windows PowerShell:**
+```powershell
+irm https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.ps1 | iex
+```
+
+## 🔄 Update Plugin
+
+To update an already installed plugin to the latest version:
+
+**Linux/macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.sh | bash
+```
+
+**Windows PowerShell:**
+```powershell
+irm https://raw.githubusercontent.com/tangqihy/openclaw-plugin-wecom/main/scripts/update-plugin.ps1 | iex
+```
+
+The update script will automatically:
+1. Detect the installed plugin directory
+2. Backup the current version
+3. Download and replace with the latest code
+4. Restart OpenClaw Gateway to apply changes
 
 ## ⚙️ Configuration
 
@@ -259,6 +296,61 @@ If an image fails to process (size limit, invalid format), the text response wil
 
 3. **Check for extra spaces/newlines**: Ensure no leading/trailing whitespace in the key string
 
+## 🖼️ Media Message Configuration
+
+This fork supports processing image and voice messages:
+
+```json
+{
+  "channels": {
+    "wecom": {
+      "media": {
+        "imageHandler": "passthrough",
+        "voiceHandler": "passthrough",
+        "visionApiEndpoint": "https://api.openai.com/v1/chat/completions",
+        "visionApiKey": "sk-xxx",
+        "visionModel": "gpt-4-vision-preview",
+        "asrApiEndpoint": "https://api.openai.com/v1/audio/transcriptions",
+        "asrApiKey": "sk-xxx"
+      }
+    }
+  }
+}
+```
+
+### Image Processing Modes
+
+| Mode | Description |
+|------|-------------|
+| `passthrough` | Pass image URL directly to vision-capable AI (default) |
+| `vision-ai` | Call Vision API to recognize image content and convert to text |
+| `none` | Don't process image messages |
+
+### Voice Processing Modes
+
+| Mode | Description |
+|------|-------------|
+| `passthrough` | Notify AI that a voice message was received (default) |
+| `asr` | Call ASR API to transcribe to text before sending to AI |
+| `none` | Don't process voice messages |
+
+## 💓 Reliability Enhancements
+
+This fork includes the following reliability improvements:
+
+### Heartbeat Mechanism
+
+- Updates stream content every 3 seconds with "thinking..." status
+- Prevents WeCom from disconnecting due to long response times
+- 60-second total timeout protection with friendly error message
+
+### Message Queue
+
+- Independent queue per user/group chat
+- Maximum 5 queued messages
+- New messages automatically queue while current is processing
+- Users receive queue position notifications
+
 ## 📂 Project Structure
 
 ```
@@ -267,10 +359,17 @@ openclaw-plugin-wecom/
 ├── webhook.js            # WeCom HTTP communication handler
 ├── dynamic-agent.js      # Dynamic agent routing logic
 ├── stream-manager.js     # Streaming response manager
+├── heartbeat-manager.js  # Heartbeat mechanism (new)
+├── message-queue.js      # Message queue manager (new)
+├── media-handler.js      # Media message processor (new)
+├── image-processor.js    # Image encoding handler
 ├── crypto.js             # WeCom encryption algorithms
 ├── client.js             # Client logic
 ├── logger.js             # Logging module
 ├── utils.js              # Utility functions
+├── scripts/
+│   ├── update-plugin.sh  # Linux/macOS update script
+│   └── update-plugin.ps1 # Windows update script
 ├── package.json          # npm package config
 └── openclaw.plugin.json  # OpenClaw plugin manifest
 ```
