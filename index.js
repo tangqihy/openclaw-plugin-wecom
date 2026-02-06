@@ -355,6 +355,10 @@ const wecomChannelPlugin = {
         shutdown: async () => {
           logger.info("WeCom gateway shutting down");
           unregister();
+          heartbeatManager.clear();
+          streamManager.stopCleanup();
+          activeStreams.clear();
+          logger.info("WeCom gateway shutdown complete");
         },
       };
     },
@@ -478,9 +482,10 @@ async function wecomHttpHandler(req, res) {
         account: target.account,
         config: target.config,
       }).catch(async (err) => {
-        logger.error("WeCom message scheduling failed", { error: err.message });
+        logger.error("WeCom message scheduling failed", { error: err.message, streamKey });
         await streamManager.finishStream(streamId);
         heartbeatManager.stop(streamId);
+        activeStreams.delete(streamKey);
       });
 
       return true;
@@ -603,13 +608,14 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
   // 启动心跳机制
   const stopHeartbeat = heartbeatManager.start(streamId, {
     onTimeout: (sid) => {
-      logger.warn("Message processing timeout (10min)", { streamId: sid });
+      logger.warn("Message processing timeout (10min)", { streamId: sid, streamKey });
       // 超时时更新流内容并完成
       streamManager.updateStream(sid, 
         "⚠️ 处理超时（已等待 10 分钟），请稍后重试。如果问题持续，请尝试简化您的问题或使用 /new 开始新会话。", 
         true
       );
       streamManager.finishStream(sid);
+      activeStreams.delete(streamKey);
       messageQueue.reset(streamKey);
     },
   });
@@ -640,6 +646,7 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
     streamManager.updateStream(streamId, messageQueue.getQueueFullMessage(), true);
     streamManager.finishStream(streamId);
     stopHeartbeat();
+    activeStreams.delete(streamKey);
     return;
   }
 

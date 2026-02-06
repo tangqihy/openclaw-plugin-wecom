@@ -106,13 +106,27 @@ class StreamManager {
             return false;
         }
 
-        stream.content += chunk;
+        const newContent = stream.content + chunk;
+
+        // 检查内容长度 (企业微信限制20480字节)
+        const contentBytes = Buffer.byteLength(newContent, 'utf8');
+        if (contentBytes > 20480) {
+            logger.warn("Stream content would exceed 20480 bytes on append, truncating", {
+                streamId,
+                bytes: contentBytes
+            });
+            stream.content = Buffer.from(newContent, 'utf8').slice(0, 20480).toString('utf8');
+        } else {
+            stream.content = newContent;
+        }
+
         stream.updatedAt = Date.now();
 
         logger.debug("Stream appended", {
             streamId,
             chunkLength: chunk.length,
-            totalLength: stream.content.length
+            totalLength: stream.content.length,
+            contentBytes: Math.min(contentBytes, 20480)
         });
 
         return true;
@@ -218,6 +232,12 @@ class StreamManager {
         const stream = this.streams.get(streamId);
         if (!stream) {
             logger.warn("Stream not found for finish", { streamId });
+            return false;
+        }
+
+        // Guard: skip if already finished to prevent duplicate image processing
+        if (stream.finished) {
+            logger.debug("Stream already finished, skipping", { streamId });
             return false;
         }
 
