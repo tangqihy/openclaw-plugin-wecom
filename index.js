@@ -126,6 +126,7 @@ function checkCommandAllowlist(message, config) {
 // Runtime state (module-level singleton)
 let _runtime = null;
 let _openclawConfig = null;
+const _startedAt = Date.now();  // plugin startup timestamp for uptime calculation
 
 /**
  * Set the plugin runtime (called during plugin registration)
@@ -418,6 +419,29 @@ const wecomChannelPlugin = {
 async function wecomHttpHandler(req, res) {
   const url = new URL(req.url || "", "http://localhost");
   const path = normalizeWebhookPath(url.pathname);
+
+  // Health check endpoint: /<webhookPath>/health
+  if (req.method === "GET" && path.endsWith("/health")) {
+    const basePath = path.replace(/\/health$/, "") || "/";
+    const hasTargets = webhookTargets.has(basePath);
+    const pkg = { version: "1.3.0" };  // sync with package.json
+    const uptimeSec = Math.floor((Date.now() - _startedAt) / 1000);
+
+    const healthData = {
+      status: hasTargets ? "ok" : "no_targets",
+      version: pkg.version,
+      uptime: uptimeSec,
+      streams: streamManager.getStats(),
+      queues: messageQueue.getStats(),
+      heartbeats: heartbeatManager.getStats(),
+      activeStreams: activeStreams.size,
+    };
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(healthData, null, 2));
+    return true;
+  }
+
   const targets = webhookTargets.get(path);
 
   if (!targets || targets.length === 0) {
@@ -457,6 +481,9 @@ async function wecomHttpHandler(req, res) {
 
   // POST: Message handling
   if (req.method === "POST") {
+    // 生成 requestId 用于全链路追踪
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
     const target = targets[0];
     if (!target) {
       res.writeHead(503, { "Content-Type": "text/plain" });
@@ -470,7 +497,7 @@ async function wecomHttpHandler(req, res) {
       chunks.push(chunk);
     }
     const body = Buffer.concat(chunks).toString("utf-8");
-    logger.debug("WeCom message received", { bodyLength: body.length });
+    logger.debug("WeCom message received", { requestId, bodyLength: body.length });
 
     const webhook = new WecomWebhook({
       token: target.account.token,
@@ -510,6 +537,7 @@ async function wecomHttpHandler(req, res) {
 
       const content = msg.content || msg.imageUrl || msg.voiceUrl || "";
       logger.info("Stream initiated", { 
+        requestId,
         streamId, 
         from: msg.fromUser, 
         msgType,
@@ -520,6 +548,7 @@ async function wecomHttpHandler(req, res) {
       const streamKey = msg.chatType === "group" ? msg.chatId : msg.fromUser;
       
       scheduleMessageProcessing({
+        requestId,
         message: msg,
         streamId,
         streamKey,
@@ -528,7 +557,7 @@ async function wecomHttpHandler(req, res) {
         account: target.account,
         config: target.config,
       }).catch(async (err) => {
-        logger.error("WeCom message scheduling failed", { error: err.message, streamKey });
+        logger.error("WeCom message scheduling failed", { requestId, error: err.message, streamKey });
         await streamManager.finishStream(streamId);
         heartbeatManager.stop(streamId);
         activeStreams.delete(streamKey);
@@ -645,17 +674,17 @@ async function wecomHttpHandler(req, res) {
 // Message Scheduling with Queue Support
 // =============================================================================
 
-async function scheduleMessageProcessing({ message, streamId, streamKey, timestamp, nonce, account, config }) {
+async function scheduleMessageProcessing({ requestId, message, streamId, streamKey, timestamp, nonce, account, config }) {
   // 通过消息队列调度
   // 注意：心跳仅在实际开始处理时启动，避免排队等待期间就开始计时
   const queueResult = await messageQueue.enqueue(
     streamKey,
-    { message, streamId, timestamp, nonce, account, config },
+    { requestId, message, streamId, timestamp, nonce, account, config },
     async (queuedMsg) => {
       // 实际处理开始，此时才启动心跳
       const stopHeartbeat = heartbeatManager.start(queuedMsg.streamId, {
         onTimeout: (sid) => {
-          logger.warn("Message processing timeout (10min)", { streamId: sid, streamKey });
+          logger.warn("Message processing timeout (10min)", { requestId: queuedMsg.requestId, streamId: sid, streamKey });
           streamManager.updateStream(sid, 
             "⚠️ 处理超时（已等待 10 分钟），请稍后重试。如果问题持续，请尝试简化您的问题或使用 /new 开始新会话。", 
             true
@@ -668,6 +697,7 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
 
       try {
         await processInboundMessage({
+          requestId: queuedMsg.requestId,
           message: queuedMsg.message,
           streamId: queuedMsg.streamId,
           timestamp: queuedMsg.timestamp,
@@ -684,6 +714,7 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
 
   // 如果队列已满，返回提示
   if (queueResult.queueFull) {
+    logger.warn("Queue full", { requestId, streamKey, streamId });
     streamManager.updateStream(streamId, messageQueue.getQueueFullMessage(), true);
     streamManager.finishStream(streamId);
     activeStreams.delete(streamKey);
@@ -694,7 +725,7 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
   if (queueResult.queued) {
     const waitingMsg = messageQueue.getWaitingMessage(queueResult.position);
     streamManager.updateStream(streamId, waitingMsg, false);
-    logger.info("Message queued", { streamKey, position: queueResult.position, streamId });
+    logger.info("Message queued", { requestId, streamKey, position: queueResult.position, streamId });
   }
 }
 
@@ -702,7 +733,7 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
 // Inbound Message Processing (triggers AI response)
 // =============================================================================
 
-async function processInboundMessage({ message, streamId, timestamp, nonce, account, config }) {
+async function processInboundMessage({ requestId, message, streamId, timestamp, nonce, account, config }) {
   const runtime = getRuntime();
   const core = runtime.channel;
 
@@ -832,6 +863,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   }
 
   logger.info("WeCom processing message", {
+    requestId,
     from: senderId,
     chatType: peerKind,
     peerId,
@@ -933,6 +965,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
     dispatcherOptions: {
       deliver: async (payload, info) => {
         logger.info("Dispatcher deliver called", {
+          requestId,
           kind: info.kind,
           hasText: !!(payload.text && payload.text.trim()),
           textPreview: (payload.text || "").substring(0, 50),
@@ -949,11 +982,11 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
         // 如果是最终回复,标记流为完成
         if (streamId && info.kind === "final") {
           await streamManager.finishStream(streamId);
-          logger.info("WeCom stream finished", { streamId });
+          logger.info("WeCom stream finished", { requestId, streamId });
         }
       },
       onError: async (err, info) => {
-        logger.error("WeCom reply failed", { error: err.message, kind: info.kind });
+        logger.error("WeCom reply failed", { requestId, error: err.message, kind: info.kind });
         // 发生错误时也标记流为完成
         if (streamId) {
           await streamManager.finishStream(streamId);
@@ -966,7 +999,7 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   if (streamId) {
     await streamManager.finishStream(streamId);
     activeStreams.delete(streamKey);  // 清理活跃流映射
-    logger.info("WeCom stream finished (dispatch complete)", { streamId });
+    logger.info("WeCom stream finished (dispatch complete)", { requestId, streamId });
   }
 }
 
