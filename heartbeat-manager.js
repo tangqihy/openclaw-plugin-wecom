@@ -13,7 +13,7 @@ class HeartbeatManager {
         // 心跳配置
         this.config = {
             interval: 3000,        // 心跳间隔 3 秒
-            maxTimeout: 60000,     // 最大超时 60 秒
+            maxTimeout: 10 * 60 * 1000,  // 最大超时 10 分钟
             thinkingMessages: [
                 "正在思考",
                 "正在分析",

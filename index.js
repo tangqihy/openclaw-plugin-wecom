@@ -603,10 +603,10 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
   // 启动心跳机制
   const stopHeartbeat = heartbeatManager.start(streamId, {
     onTimeout: (sid) => {
-      logger.warn("Message processing timeout", { streamId: sid });
+      logger.warn("Message processing timeout (10min)", { streamId: sid });
       // 超时时更新流内容并完成
       streamManager.updateStream(sid, 
-        "⚠️ 处理超时，请稍后重试。如果问题持续，请尝试简化您的问题。", 
+        "⚠️ 处理超时（已等待 10 分钟），请稍后重试。如果问题持续，请尝试简化您的问题或使用 /new 开始新会话。", 
         true
       );
       streamManager.finishStream(sid);

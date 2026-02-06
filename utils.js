@@ -125,7 +125,7 @@ export function sleep(ms) {
 // Message Deduplication
 // ============================================================================
 export class MessageDeduplicator {
-    seen = new TTLCache({ ttl: 300000 }); // 5 minutes
+    seen = new TTLCache({ ttl: 15 * 60 * 1000 }); // 15 minutes (must exceed heartbeat maxTimeout)
     isDuplicate(msgId) {
         if (this.seen.has(msgId)) {
             return true;
