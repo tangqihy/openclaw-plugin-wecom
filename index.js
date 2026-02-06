@@ -24,6 +24,7 @@ const DEFAULT_COMMAND_ALLOWLIST = [
   "/compact", // 压缩会话
   "/help",    // 帮助
   "/status",  // 状态
+  "/cancel",  // 取消当前处理
 ];
 
 // 默认拦截消息
@@ -33,7 +34,19 @@ const DEFAULT_COMMAND_BLOCK_MESSAGE = `⚠️ 该命令不可用。
 • **/new** - 新建会话
 • **/compact** - 压缩会话（保留上下文摘要）
 • **/help** - 查看帮助
-• **/status** - 查看状态`;
+• **/status** - 查看状态
+• **/cancel** - 取消当前处理`;
+
+// 默认欢迎消息
+const DEFAULT_WELCOME_MESSAGE = `你好！👋 我是 AI 助手。
+
+你可以使用下面的指令管理会话：
+• **/new** - 新建会话（清空上下文）
+• **/compact** - 压缩会话（保留上下文摘要）
+• **/cancel** - 取消当前处理
+• **/help** - 查看更多命令
+
+有什么我可以帮你的吗？`;
 
 /**
  * 获取命令白名单配置
@@ -46,6 +59,36 @@ function getCommandConfig(config) {
     blockMessage: commands.blockMessage || DEFAULT_COMMAND_BLOCK_MESSAGE,
     enabled: commands.enabled !== false,  // 默认启用白名单
   };
+}
+
+/**
+ * 获取 WeCom 插件运行时配置
+ * 从 config.channels.wecom 读取所有可配置参数
+ */
+function getWecomRuntimeConfig(config) {
+  const wecom = config?.channels?.wecom || {};
+  const hb = wecom.heartbeat || {};
+  const queue = wecom.queue || {};
+  const stream = wecom.stream || {};
+  return {
+    heartbeatInterval: hb.interval || 3000,              // 心跳间隔 ms
+    heartbeatMaxTimeout: hb.maxTimeout || 10 * 60 * 1000, // 最大超时 ms
+    queueMaxSize: queue.maxSize || 5,                     // 每用户最大队列
+    streamCleanupDelay: stream.cleanupDelay || 30 * 1000,  // 流完成后清理延迟 ms
+    streamExpiry: stream.expiry || 10 * 60 * 1000,         // 流过期时间 ms
+  };
+}
+
+/**
+ * 将运行时配置应用到各个 manager 单例
+ */
+function applyRuntimeConfig(config) {
+  const rc = getWecomRuntimeConfig(config);
+  heartbeatManager.config.interval = rc.heartbeatInterval;
+  heartbeatManager.config.maxTimeout = rc.heartbeatMaxTimeout;
+  messageQueue.config.maxQueueSize = rc.queueMaxSize;
+  streamManager.setExpiry(rc.streamExpiry);
+  logger.debug("Runtime config applied", rc);
 }
 
 /**
@@ -345,6 +388,9 @@ const wecomChannelPlugin = {
       const account = ctx.account;
       logger.info("WeCom gateway starting", { accountId: account.accountId, webhookPath: account.webhookPath });
 
+      // 应用运行时配置到各 manager
+      applyRuntimeConfig(ctx.cfg);
+
       const unregister = registerWebhookTarget({
         path: account.webhookPath || "/webhooks/wecom",
         account,
@@ -538,9 +584,10 @@ async function wecomHttpHandler(req, res) {
 
       // 如果流已完成,在一段时间后清理
       if (stream.finished) {
+        const rc = getWecomRuntimeConfig(target.config);
         setTimeout(() => {
           streamManager.deleteStream(streamId);
-        }, 30 * 1000); // 30秒后清理
+        }, rc.streamCleanupDelay);
       }
 
       return true;
@@ -555,15 +602,9 @@ async function wecomHttpHandler(req, res) {
         const { timestamp, nonce } = result.query;
         const fromUser = result.event?.from?.userid || "";
 
-        // 欢迎语内容
-        const welcomeMessage = `你好！👋 我是 AI 助手。
-
-你可以使用下面的指令管理会话：
-• **/new** - 新建会话（清空上下文）
-• **/compact** - 压缩会话（保留上下文摘要）
-• **/help** - 查看更多命令
-
-有什么我可以帮你的吗？`;
+        // 欢迎语内容（支持从配置读取）
+        const wecomConfig = target.config?.channels?.wecom || {};
+        const welcomeMessage = wecomConfig.welcomeMessage || DEFAULT_WELCOME_MESSAGE;
 
         // 创建流并返回欢迎语
         const streamId = `welcome_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -742,6 +783,34 @@ async function processInboundMessage({ message, streamId, timestamp, nonce, acco
   
   if (msgType === "text") {
     commandCheck = checkCommandAllowlist(rawBody, config);
+
+    // 处理 /cancel 命令：取消当前处理和队列
+    if (commandCheck.command === "/cancel") {
+      logger.info("WeCom: /cancel command received", { from: senderId, streamKey });
+
+      // 停止当前心跳
+      const currentStreamId = messageQueue.getCurrentStreamId(streamKey);
+      if (currentStreamId) {
+        heartbeatManager.stop(currentStreamId);
+        streamManager.updateStream(currentStreamId, "⚠️ 已被用户取消。", true);
+        await streamManager.finishStream(currentStreamId);
+      }
+
+      // 清空队列
+      const cancelled = messageQueue.cancel(streamKey);
+
+      // 回复确认消息
+      const cancelMsg = cancelled > 0
+        ? `✅ 已取消当前处理，并清除了 ${cancelled} 条排队消息。`
+        : "✅ 已取消当前处理。";
+
+      if (streamId) {
+        streamManager.updateStream(streamId, cancelMsg, true);
+        await streamManager.finishStream(streamId);
+        activeStreams.delete(streamKey);
+      }
+      return;
+    }
 
     if (commandCheck.isCommand && !commandCheck.allowed) {
       // 命令不在白名单中，返回拒绝消息

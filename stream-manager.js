@@ -284,11 +284,19 @@ class StreamManager {
     }
 
     /**
-     * 清理超过10分钟未更新的流
+     * 设置流过期时间（可通过配置调整）
+     * @param {number} ms - 过期时间（毫秒）
+     */
+    setExpiry(ms) {
+        this._expiryMs = ms;
+    }
+
+    /**
+     * 清理超过过期时间未更新的流
      */
     cleanup() {
         const now = Date.now();
-        const timeout = 10 * 60 * 1000; // 10 minutes
+        const timeout = this._expiryMs || 10 * 60 * 1000;
         let cleaned = 0;
 
         for (const [streamId, stream] of this.streams.entries()) {
