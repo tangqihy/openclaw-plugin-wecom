@@ -605,26 +605,26 @@ async function wecomHttpHandler(req, res) {
 // =============================================================================
 
 async function scheduleMessageProcessing({ message, streamId, streamKey, timestamp, nonce, account, config }) {
-  // 启动心跳机制
-  const stopHeartbeat = heartbeatManager.start(streamId, {
-    onTimeout: (sid) => {
-      logger.warn("Message processing timeout (10min)", { streamId: sid, streamKey });
-      // 超时时更新流内容并完成
-      streamManager.updateStream(sid, 
-        "⚠️ 处理超时（已等待 10 分钟），请稍后重试。如果问题持续，请尝试简化您的问题或使用 /new 开始新会话。", 
-        true
-      );
-      streamManager.finishStream(sid);
-      activeStreams.delete(streamKey);
-      messageQueue.reset(streamKey);
-    },
-  });
-
   // 通过消息队列调度
+  // 注意：心跳仅在实际开始处理时启动，避免排队等待期间就开始计时
   const queueResult = await messageQueue.enqueue(
     streamKey,
     { message, streamId, timestamp, nonce, account, config },
     async (queuedMsg) => {
+      // 实际处理开始，此时才启动心跳
+      const stopHeartbeat = heartbeatManager.start(queuedMsg.streamId, {
+        onTimeout: (sid) => {
+          logger.warn("Message processing timeout (10min)", { streamId: sid, streamKey });
+          streamManager.updateStream(sid, 
+            "⚠️ 处理超时（已等待 10 分钟），请稍后重试。如果问题持续，请尝试简化您的问题或使用 /new 开始新会话。", 
+            true
+          );
+          streamManager.finishStream(sid);
+          activeStreams.delete(streamKey);
+          messageQueue.reset(streamKey);
+        },
+      });
+
       try {
         await processInboundMessage({
           message: queuedMsg.message,
@@ -645,12 +645,11 @@ async function scheduleMessageProcessing({ message, streamId, streamKey, timesta
   if (queueResult.queueFull) {
     streamManager.updateStream(streamId, messageQueue.getQueueFullMessage(), true);
     streamManager.finishStream(streamId);
-    stopHeartbeat();
     activeStreams.delete(streamKey);
     return;
   }
 
-  // 如果消息被排队，通知用户
+  // 如果消息被排队，通知用户（不启动心跳，只显示静态等待消息）
   if (queueResult.queued) {
     const waitingMsg = messageQueue.getWaitingMessage(queueResult.position);
     streamManager.updateStream(streamId, waitingMsg, false);

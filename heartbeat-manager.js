@@ -1,6 +1,9 @@
 import { logger } from "./logger.js";
 import { streamManager } from "./stream-manager.js";
 
+// 心跳内容使用零宽空格作为唯一标记，避免与 AI 输出内容冲突
+const HEARTBEAT_MARKER = "\u200B\u200B\u200B";
+
 /**
  * 心跳管理器
  * 在 AI 处理期间定时更新流内容，避免企业微信超时
@@ -105,7 +108,8 @@ class HeartbeatManager {
         const msgIndex = Math.floor(elapsed / 10000) % this.config.thinkingMessages.length;
         const thinkingMsg = this.config.thinkingMessages[msgIndex];
         
-        const heartbeatContent = `${thinkingMsg}${dots} ⏳`;
+        // 使用 HEARTBEAT_MARKER 前缀标记心跳内容，便于后续精确识别
+        const heartbeatContent = `${HEARTBEAT_MARKER}${thinkingMsg}${dots} ⏳`;
         
         // 使用 updateStream 而不是 appendStream，避免累积
         streamManager.updateStream(streamId, heartbeatContent, false);
@@ -119,16 +123,11 @@ class HeartbeatManager {
 
     /**
      * 检查内容是否是心跳内容
+     * 使用零宽空格标记精确检测，避免与 AI 生成的内容冲突
      */
     _isHeartbeatContent(content) {
         if (!content) return false;
-        // 心跳内容特征：以思考消息开头，以 ⏳ 结尾
-        return content.includes("⏳") && (
-            content.includes("正在思考") ||
-            content.includes("正在分析") ||
-            content.includes("正在处理") ||
-            content.includes("正在生成回复")
-        );
+        return content.startsWith(HEARTBEAT_MARKER);
     }
 
     /**

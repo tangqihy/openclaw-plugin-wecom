@@ -32,6 +32,7 @@ class MessageQueueManager {
                 processing: false,
                 currentStreamId: null,
                 queue: [],
+                _cleanupGen: 0,
             };
             this.queues.set(streamKey, queueState);
         }
@@ -117,10 +118,13 @@ class MessageQueueManager {
             
             logger.debug("Message queue: queue empty", { streamKey });
             
-            // 如果队列长时间为空，清理
+            // 使用 generation 计数器避免清理时竞态：
+            // 在设定延迟清理前记住当前 generation，清理时若 generation 已变则跳过
+            const gen = ++queueState._cleanupGen;
+            queueState._cleanupGen = gen;
             setTimeout(() => {
                 const state = this.queues.get(streamKey);
-                if (state && !state.processing && state.queue.length === 0) {
+                if (state && !state.processing && state.queue.length === 0 && state._cleanupGen === gen) {
                     this.queues.delete(streamKey);
                     logger.debug("Message queue: cleaned up empty queue", { streamKey });
                 }
