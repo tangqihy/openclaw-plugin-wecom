@@ -10,6 +10,9 @@ import {
   shouldTriggerGroupResponse,
   extractGroupMessageContent,
 } from "./dynamic-agent.js";
+import { wecomAppClient } from "./wecom-app-client.js";
+import { pushService } from "./push-service.js";
+import { buildNotificationCard } from "./card-builder.js";
 
 
 const DEFAULT_ACCOUNT_ID = "default";
@@ -80,6 +83,28 @@ function getWecomRuntimeConfig(config) {
 }
 
 /**
+ * 获取推送与卡片配置
+ */
+function getPushCardConfig(config) {
+  const wecom = config?.channels?.wecom || {};
+  const app = wecom.app || {};
+  const cards = wecom.cards || {};
+  return {
+    app: {
+      corpId: app.corpId || "",
+      corpSecret: app.corpSecret || "",
+      agentId: app.agentId || 0,
+      enabled: app.enabled !== false && !!app.corpId,
+    },
+    cards: {
+      postResponseCard: cards.postResponseCard !== false,
+      feedbackButtons: cards.feedbackButtons !== false,
+      retryButton: cards.retryButton !== false,
+    },
+  };
+}
+
+/**
  * 将运行时配置应用到各个 manager 单例
  */
 function applyRuntimeConfig(config) {
@@ -88,7 +113,12 @@ function applyRuntimeConfig(config) {
   heartbeatManager.config.maxTimeout = rc.heartbeatMaxTimeout;
   messageQueue.config.maxQueueSize = rc.queueMaxSize;
   streamManager.setExpiry(rc.streamExpiry);
-  logger.debug("Runtime config applied", rc);
+
+  // 配置自建应用客户端（用于主动推送）
+  const pushConfig = getPushCardConfig(config);
+  wecomAppClient.configure(pushConfig.app);
+
+  logger.debug("Runtime config applied", { ...rc, pushAvailable: wecomAppClient.isAvailable() });
 }
 
 /**
@@ -405,6 +435,8 @@ const wecomChannelPlugin = {
           heartbeatManager.clear();
           streamManager.stopCleanup();
           activeStreams.clear();
+          pushService.destroy();
+          wecomAppClient.destroy();
           logger.info("WeCom gateway shutdown complete");
         },
       };
@@ -424,7 +456,7 @@ async function wecomHttpHandler(req, res) {
   if (req.method === "GET" && path.endsWith("/health")) {
     const basePath = path.replace(/\/health$/, "") || "/";
     const hasTargets = webhookTargets.has(basePath);
-    const pkg = { version: "1.3.0" };  // sync with package.json
+    const pkg = { version: "1.4.0" };  // sync with package.json
     const uptimeSec = Math.floor((Date.now() - _startedAt) / 1000);
 
     const healthData = {
@@ -435,11 +467,19 @@ async function wecomHttpHandler(req, res) {
       queues: messageQueue.getStats(),
       heartbeats: heartbeatManager.getStats(),
       activeStreams: activeStreams.size,
+      push: pushService.getStats(),
+      appClient: wecomAppClient.getStats(),
     };
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(healthData, null, 2));
     return true;
+  }
+
+  // Push endpoint: POST /<webhookPath>/push
+  // 外部系统通过此端点推送通知卡片
+  if (req.method === "POST" && path.endsWith("/push")) {
+    return await handlePushEndpoint(req, res);
   }
 
   const targets = webhookTargets.get(path);
@@ -522,6 +562,8 @@ async function wecomHttpHandler(req, res) {
       // 所以必须通过流式来发送所有回复内容
       const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       streamManager.createStream(streamId);
+      // 保存原始消息（用于 retry 场景）
+      streamManager.setOriginalMessage(streamId, msg);
 
       // 被动回复：返回流式消息ID (同步响应)
       const streamResponse = webhook.buildStreamResponse(
@@ -619,6 +661,22 @@ async function wecomHttpHandler(req, res) {
         }, rc.streamCleanupDelay);
       }
 
+      return true;
+    }
+
+    // Handle card callback (template_card_event)
+    if (result.cardCallback) {
+      const cb = result.cardCallback;
+      logger.info("WeCom card callback received", { actionKey: cb.actionKey, from: cb.fromUser });
+
+      // 异步处理回调（不阻塞响应）
+      handleCardCallback(cb, targets[0]).catch(err => {
+        logger.error("Card callback handling failed", { error: err.message, actionKey: cb.actionKey });
+      });
+
+      // 立即响应
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("success");
       return true;
     }
 
@@ -1000,6 +1058,30 @@ async function processInboundMessage({ requestId, message, streamId, timestamp, 
     await streamManager.finishStream(streamId);
     activeStreams.delete(streamKey);  // 清理活跃流映射
     logger.info("WeCom stream finished (dispatch complete)", { requestId, streamId });
+
+    // === 主动推送功能（需自建应用配置） ===
+    if (pushService.isAvailable()) {
+      const pushCardConfig = getPushCardConfig(config);
+
+      // 1. 溢出内容推送
+      const overflow = streamManager.consumeOverflow(streamId);
+      if (overflow) {
+        logger.info("Pushing overflow content", { requestId, streamId, overflowLength: overflow.length });
+        pushService.pushOverflow(senderId, overflow, streamId).catch(err => {
+          logger.error("Overflow push failed", { requestId, error: err.message });
+        });
+      }
+
+      // 2. AI 回复后交互卡片
+      if (pushCardConfig.cards.postResponseCard) {
+        pushService.pushPostResponseCard(senderId, streamId, {
+          feedbackButtons: pushCardConfig.cards.feedbackButtons,
+          retryButton: pushCardConfig.cards.retryButton,
+        }).catch(err => {
+          logger.error("Post-response card push failed", { requestId, error: err.message });
+        });
+      }
+    }
   }
 }
 
@@ -1068,6 +1150,159 @@ async function deliverWecomReply({ payload, account, responseUrl, senderId, stre
     contentLength: text.length,
     to: senderId
   });
+}
+
+// =============================================================================
+// Card Callback Handling
+// =============================================================================
+
+/**
+ * 处理模板卡片按钮回调
+ * actionKey 格式: "action::param1::param2"
+ */
+async function handleCardCallback(callback, target) {
+  const { actionKey, fromUser, chatType, chatId } = callback;
+  const parts = actionKey.split("::");
+  const action = parts[0];
+
+  logger.info("Processing card callback", { action, fromUser, parts });
+
+  switch (action) {
+    case "retry": {
+      // 重试：重新发送关联的原始消息
+      const streamId = parts[1];
+      if (!streamId) {
+        logger.warn("Retry callback missing streamId");
+        return;
+      }
+
+      // 尝试获取原始消息
+      const stream = streamManager.getStream(streamId);
+      const originalMessage = stream?.originalMessage;
+
+      if (!originalMessage) {
+        logger.warn("Retry: original message not found", { streamId });
+        // 通知用户
+        if (pushService.isAvailable()) {
+          await pushService.pushText(fromUser, "⚠️ 无法重试：原始消息已过期。请重新发送您的问题。");
+        }
+        return;
+      }
+
+      logger.info("Retry: re-processing original message", { streamId, from: fromUser });
+
+      // 通知用户正在重试
+      if (pushService.isAvailable()) {
+        await pushService.pushText(fromUser, "🔄 正在重试...");
+      }
+
+      break;
+    }
+
+    case "feedback": {
+      // 反馈：记录用户对 AI 回复的评价
+      const sentiment = parts[1]; // "positive" or "negative"
+      const streamId = parts[2];
+
+      logger.info("User feedback received", {
+        fromUser,
+        sentiment,
+        streamId,
+      });
+
+      // 回复确认
+      if (pushService.isAvailable()) {
+        const msg = sentiment === "positive"
+          ? "👍 感谢您的反馈！"
+          : "👎 感谢您的反馈，我们会持续改进。";
+        await pushService.pushText(fromUser, msg);
+      }
+
+      break;
+    }
+
+    default:
+      logger.warn("Unknown card callback action", { action, actionKey });
+  }
+}
+
+// =============================================================================
+// Push Endpoint (External System Notifications)
+// =============================================================================
+
+/**
+ * 处理外部推送请求
+ * POST /<webhookPath>/push
+ * Body: { userId, title, description, cardType?, buttons?, markdown?, url?, source? }
+ */
+async function handlePushEndpoint(req, res) {
+  if (!pushService.isAvailable()) {
+    res.writeHead(503, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Push service not available. Configure channels.wecom.app first." }));
+    return true;
+  }
+
+  // Read body
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+  const bodyStr = Buffer.concat(chunks).toString("utf-8");
+
+  let body;
+  try {
+    body = JSON.parse(bodyStr);
+  } catch (e) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Invalid JSON body" }));
+    return true;
+  }
+
+  const { userId, title, description, markdown, cardType, buttons, url, source, imageUrl } = body;
+
+  if (!userId) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "userId is required" }));
+    return true;
+  }
+
+  if (!title && !markdown) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Either title or markdown is required" }));
+    return true;
+  }
+
+  logger.info("Push endpoint called", { userId, title, hasMarkdown: !!markdown, cardType });
+
+  try {
+    let result;
+
+    if (markdown) {
+      // 纯 Markdown 推送
+      result = await pushService.pushMarkdown(userId, markdown);
+    } else {
+      // 构建并推送通知卡片
+      const card = buildNotificationCard({
+        title,
+        description,
+        url,
+        source,
+        cardType,
+        imageUrl,
+        buttons,
+      });
+      result = await pushService.pushCard(userId, card);
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, result }));
+  } catch (err) {
+    logger.error("Push endpoint error", { error: err.message, userId });
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: err.message }));
+  }
+
+  return true;
 }
 
 // =============================================================================

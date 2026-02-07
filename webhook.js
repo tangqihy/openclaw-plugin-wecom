@@ -252,6 +252,34 @@ export class WecomWebhook {
                 query: { timestamp, nonce },
             };
         }
+        else if (msgtype === "template_card_event") {
+            // 用户点击了模板卡片上的按钮
+            const eventKey = data.event?.event_key || "";
+            const fromUser = data.from?.userid || "";
+            const responseUrl = data.response_url || "";
+            const chatType = data.chattype || "single";
+            const chatId = data.chatid || "";
+            const taskId = data.event?.task_id || "";
+
+            logger.info("Received template_card_event", {
+                fromUser,
+                eventKey,
+                taskId,
+                chatType,
+            });
+
+            return {
+                cardCallback: {
+                    actionKey: eventKey,
+                    fromUser,
+                    chatType,
+                    chatId,
+                    responseUrl,
+                    taskId,
+                },
+                query: { timestamp, nonce },
+            };
+        }
         else if (msgtype === "event") {
             logger.info("Received event", { event: data.event });
             return {

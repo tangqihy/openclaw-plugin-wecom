@@ -5,9 +5,13 @@ import { prepareImageForMsgItem } from "./image-processor.js";
  * 流式消息状态管理器
  * 管理所有活跃的流式消息会话,支持企业微信的流式刷新机制
  */
+
+const OVERFLOW_THRESHOLD_BYTES = 18000; // 溢出检测阈值（留 2KB 安全余量给截断提示）
+const OVERFLOW_NOTICE = "\n\n---\n> 内容较长，完整内容将通过消息推送发送。";
+
 class StreamManager {
     constructor() {
-        // streamId -> { content: string, finished: boolean, updatedAt: number, feedbackId: string|null, msgItem: Array, pendingImages: Array }
+        // streamId -> { content: string, finished: boolean, updatedAt: number, feedbackId: string|null, msgItem: Array, pendingImages: Array, overflowContent: string|null, originalMessage: object|null }
         this.streams = new Map();
         this._cleanupInterval = null;
     }
@@ -44,6 +48,8 @@ class StreamManager {
             feedbackId: options.feedbackId || null,  // 用户反馈追踪
             msgItem: [],  // 图文混排消息列表
             pendingImages: [],  // 待处理的图片路径列表
+            overflowContent: null,   // 溢出内容（超过 18KB 的部分）
+            originalMessage: null,   // 原始消息（用于 retry 等场景）
         });
         return streamId;
     }
@@ -97,6 +103,7 @@ class StreamManager {
 
     /**
      * 追加内容到流 (用于流式生成)
+     * 当内容超过 OVERFLOW_THRESHOLD_BYTES 时，触发溢出处理
      */
     appendStream(streamId, chunk) {
         this.startCleanup();
@@ -107,13 +114,54 @@ class StreamManager {
         }
 
         const newContent = stream.content + chunk;
-
-        // 检查内容长度 (企业微信限制20480字节)
         const contentBytes = Buffer.byteLength(newContent, 'utf8');
+
+        // 溢出检测：超过 18KB 时截断并存储溢出内容
+        if (contentBytes > OVERFLOW_THRESHOLD_BYTES && !stream.overflowContent) {
+            logger.info("Stream content overflow detected, splitting", {
+                streamId,
+                bytes: contentBytes,
+                threshold: OVERFLOW_THRESHOLD_BYTES,
+            });
+
+            // 截断到阈值字节并尝试在换行处断开
+            const truncated = Buffer.from(newContent, 'utf8').slice(0, OVERFLOW_THRESHOLD_BYTES).toString('utf8');
+            const lastNewline = truncated.lastIndexOf("\n");
+            const splitPoint = lastNewline > truncated.length * 0.5 ? lastNewline : truncated.length;
+
+            stream.content = newContent.substring(0, splitPoint) + OVERFLOW_NOTICE;
+            stream.overflowContent = newContent.substring(splitPoint);
+
+            stream.updatedAt = Date.now();
+
+            logger.debug("Stream overflow split", {
+                streamId,
+                mainBytes: Buffer.byteLength(stream.content, 'utf8'),
+                overflowBytes: Buffer.byteLength(stream.overflowContent, 'utf8'),
+            });
+
+            return true;
+        }
+
+        // 如果已经有溢出内容，新内容追加到溢出部分
+        if (stream.overflowContent !== null) {
+            stream.overflowContent += chunk;
+            stream.updatedAt = Date.now();
+
+            logger.debug("Stream appended to overflow", {
+                streamId,
+                chunkLength: chunk.length,
+                overflowLength: stream.overflowContent.length,
+            });
+
+            return true;
+        }
+
+        // 正常追加（兜底硬限制 20480 字节）
         if (contentBytes > 20480) {
             logger.warn("Stream content would exceed 20480 bytes on append, truncating", {
                 streamId,
-                bytes: contentBytes
+                bytes: contentBytes,
             });
             stream.content = Buffer.from(newContent, 'utf8').slice(0, 20480).toString('utf8');
         } else {
@@ -126,7 +174,7 @@ class StreamManager {
             streamId,
             chunkLength: chunk.length,
             totalLength: stream.content.length,
-            contentBytes: Math.min(contentBytes, 20480)
+            contentBytes: Math.min(contentBytes, 20480),
         });
 
         return true;
@@ -256,6 +304,33 @@ class StreamManager {
         });
 
         return true;
+    }
+
+    /**
+     * 设置流关联的原始消息（用于 retry 等场景）
+     * @param {string} streamId
+     * @param {object} message
+     */
+    setOriginalMessage(streamId, message) {
+        const stream = this.streams.get(streamId);
+        if (stream) {
+            stream.originalMessage = message;
+        }
+    }
+
+    /**
+     * 获取并清除溢出内容
+     * @param {string} streamId
+     * @returns {string|null}
+     */
+    consumeOverflow(streamId) {
+        const stream = this.streams.get(streamId);
+        if (!stream || !stream.overflowContent) {
+            return null;
+        }
+        const overflow = stream.overflowContent;
+        stream.overflowContent = null;
+        return overflow;
     }
 
     /**
