@@ -602,7 +602,10 @@ async function wecomHttpHandler(req, res) {
         logger.error("WeCom message scheduling failed", { requestId, error: err.message, streamKey });
         await streamManager.finishStream(streamId);
         heartbeatManager.stop(streamId);
-        activeStreams.delete(streamKey);
+        // 仅当此 streamId 仍是活跃映射时才删除，避免误删后续消息的映射
+        if (activeStreams.get(streamKey) === streamId) {
+          activeStreams.delete(streamKey);
+        }
       });
 
       return true;
@@ -775,7 +778,10 @@ async function scheduleMessageProcessing({ requestId, message, streamId, streamK
     logger.warn("Queue full", { requestId, streamKey, streamId });
     streamManager.updateStream(streamId, messageQueue.getQueueFullMessage(), true);
     streamManager.finishStream(streamId);
-    activeStreams.delete(streamKey);
+    // 队列满时新 stream 未被处理，仅清理自己的映射
+    if (activeStreams.get(streamKey) === streamId) {
+      activeStreams.delete(streamKey);
+    }
     return;
   }
 
@@ -1056,7 +1062,11 @@ async function processInboundMessage({ requestId, message, streamId, timestamp, 
   // 确保在dispatch完成后标记流为完成（兜底机制）
   if (streamId) {
     await streamManager.finishStream(streamId);
-    activeStreams.delete(streamKey);  // 清理活跃流映射
+    // 仅当此 streamId 仍是活跃映射时才删除
+    // 防止超时后旧处理完成时误删新消息的映射（竞态条件修复）
+    if (activeStreams.get(streamKey) === streamId) {
+      activeStreams.delete(streamKey);
+    }
     logger.info("WeCom stream finished (dispatch complete)", { requestId, streamId });
 
     // === 主动推送功能（需自建应用配置） ===

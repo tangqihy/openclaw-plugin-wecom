@@ -79,6 +79,7 @@ class MessageQueueManager {
      * 处理消息并自动处理队列中下一条
      */
     async _processMessage(streamKey, message, processor) {
+        const myStreamId = message.streamId;
         try {
             await processor(message);
         } catch (err) {
@@ -87,8 +88,18 @@ class MessageQueueManager {
                 error: err.message 
             });
         } finally {
-            // 处理完成，检查队列
-            this._processNext(streamKey);
+            // 仅当此处理仍是当前活跃处理时，才推进队列
+            // 防止超时 reset 后旧处理完成时干扰新消息的处理状态（竞态条件修复）
+            const queueState = this.queues.get(streamKey);
+            if (queueState && queueState.currentStreamId === myStreamId) {
+                this._processNext(streamKey);
+            } else {
+                logger.debug("Message queue: stale processor completed, skipping _processNext", {
+                    streamKey,
+                    myStreamId,
+                    currentStreamId: queueState?.currentStreamId,
+                });
+            }
         }
     }
 
