@@ -181,6 +181,9 @@ function Main {
         "heartbeat-manager.js",
         "message-queue.js",
         "media-handler.js",
+        "wecom-app-client.js",
+        "card-builder.js",
+        "push-service.js",
         "client.js",
         "crypto.js",
         "dynamic-agent.js",
@@ -202,14 +205,26 @@ function Main {
     
     Write-Success "插件文件更新完成"
 
-    # 5. 显示版本信息
+    # 5. 安装/更新依赖
+    Write-Info "安装依赖包..."
+    Push-Location $pluginDir
+    try {
+        npm install --production 2>&1 | Out-Null
+        Write-Success "依赖安装完成"
+    } catch {
+        Write-Warn "依赖安装失败，请手动执行: cd $pluginDir; npm install --production"
+    } finally {
+        Pop-Location
+    }
+
+    # 6. 显示版本信息
     $packageJson = Join-Path $pluginDir "package.json"
     if (Test-Path $packageJson) {
         $pkg = Get-Content $packageJson | ConvertFrom-Json
         Write-Success "插件已更新到版本: $($pkg.version) (commit: $commitHash)"
     }
 
-    # 6. 重启 OpenClaw Gateway
+    # 7. 重启 OpenClaw Gateway
     Write-Host ""
     Write-Info "重启 OpenClaw Gateway 以应用更改..."
     

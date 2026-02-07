@@ -163,6 +163,9 @@ main() {
         "heartbeat-manager.js"
         "message-queue.js"
         "media-handler.js"
+        "wecom-app-client.js"
+        "card-builder.js"
+        "push-service.js"
         "client.js"
         "crypto.js"
         "dynamic-agent.js"
@@ -182,13 +185,19 @@ main() {
     
     log_success "插件文件更新完成"
 
-    # 5. 显示版本信息
+    # 5. 安装/更新依赖
+    log_info "安装依赖包..."
+    cd "$PLUGIN_DIR"
+    npm install --production
+    log_success "依赖安装完成"
+
+    # 6. 显示版本信息
     if [ -f "$PLUGIN_DIR/package.json" ]; then
         NEW_VERSION=$(grep -o '"version": "[^"]*"' "$PLUGIN_DIR/package.json" | cut -d'"' -f4)
         log_success "插件已更新到版本: $NEW_VERSION (commit: $COMMIT_HASH)"
     fi
 
-    # 6. 重启 OpenClaw Gateway
+    # 7. 重启 OpenClaw Gateway
     echo ""
     log_info "重启 OpenClaw Gateway 以应用更改..."
     
