@@ -456,7 +456,7 @@ async function wecomHttpHandler(req, res) {
   if (req.method === "GET" && path.endsWith("/health")) {
     const basePath = path.replace(/\/health$/, "") || "/";
     const hasTargets = webhookTargets.has(basePath);
-    const pkg = { version: "1.4.0" };  // sync with package.json
+    const pkg = { version: "1.5.0" };  // sync with package.json
     const uptimeSec = Math.floor((Date.now() - _startedAt) / 1000);
 
     const healthData = {
@@ -577,7 +577,7 @@ async function wecomHttpHandler(req, res) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(streamResponse);
 
-      const content = msg.content || msg.imageUrl || msg.voiceUrl || "";
+      const content = msg.content || msg.imageUrl || msg.voiceUrl || msg.fileName || "";
       logger.info("Stream initiated", { 
         requestId,
         streamId, 

@@ -122,9 +122,11 @@ main() {
     
     log_success "找到插件目录: $PLUGIN_DIR"
 
-    # 2. 备份当前版本
+    # 2. 备份当前版本（备份到专用目录，避免被 OpenClaw 识别为插件）
     log_info "备份当前插件版本..."
-    BACKUP_DIR="${PLUGIN_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
+    BACKUP_BASE_DIR="$HOME/.openclaw/plugin-backups"
+    mkdir -p "$BACKUP_BASE_DIR"
+    BACKUP_DIR="$BACKUP_BASE_DIR/$PLUGIN_NAME.$(date +%Y%m%d_%H%M%S)"
     cp -r "$PLUGIN_DIR" "$BACKUP_DIR"
     log_success "备份完成: $BACKUP_DIR"
 

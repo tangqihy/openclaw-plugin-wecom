@@ -125,10 +125,14 @@ function Main {
     
     Write-Success "找到插件目录: $pluginDir"
 
-    # 2. 备份当前版本
+    # 2. 备份当前版本（备份到专用目录，避免被 OpenClaw 识别为插件）
     Write-Info "备份当前插件版本..."
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $backupDir = "$pluginDir.backup.$timestamp"
+    $backupBaseDir = "$env:USERPROFILE\.openclaw\plugin-backups"
+    if (-not (Test-Path $backupBaseDir)) {
+        New-Item -ItemType Directory -Path $backupBaseDir -Force | Out-Null
+    }
+    $backupDir = "$backupBaseDir\$PLUGIN_NAME.$timestamp"
     Copy-Item -Path $pluginDir -Destination $backupDir -Recurse
     Write-Success "备份完成: $backupDir"
 

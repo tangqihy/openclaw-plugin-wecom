@@ -252,6 +252,40 @@ export class WecomWebhook {
                 query: { timestamp, nonce },
             };
         }
+        else if (msgtype === "file") {
+            // 文件消息
+            const fileMediaId = data.file?.media_id;
+            const fileName = data.file?.file_name || "";
+            const fileSize = data.file?.file_size || 0;
+            const msgId = data.msgid || `msg_${Date.now()}`;
+            const fromUser = data.from?.userid || "";
+            const responseUrl = data.response_url || "";
+            const chatType = data.chattype || "single";
+            const chatId = data.chatid || "";
+
+            // Check for duplicates
+            if (this.deduplicator.isDuplicate(msgId)) {
+                logger.debug("Duplicate file message ignored", { msgId });
+                return null;
+            }
+
+            logger.info("Received file message", { fromUser, chatType, fileName, fileSize, hasMediaId: !!fileMediaId });
+
+            return {
+                message: {
+                    msgId,
+                    msgType: "file",
+                    mediaId: fileMediaId,
+                    fileName,
+                    fileSize,
+                    fromUser,
+                    chatType,
+                    chatId,
+                    responseUrl,
+                },
+                query: { timestamp, nonce },
+            };
+        }
         else if (msgtype === "template_card_event") {
             // 用户点击了模板卡片上的按钮
             const eventKey = data.event?.event_key || "";

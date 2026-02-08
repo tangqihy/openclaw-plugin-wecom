@@ -228,6 +228,83 @@ class WecomAppClient {
         });
     }
 
+    // =========================================================================
+    // 媒体下载
+    // =========================================================================
+
+    /**
+     * 下载临时素材（语音、文件等）
+     * 调用企业微信 /cgi-bin/media/get 接口
+     * @param {string} mediaId - 媒体文件 ID
+     * @returns {Promise<{ buffer: Buffer, contentType: string, filename: string }>}
+     */
+    async downloadMedia(mediaId) {
+        if (!this.isAvailable()) {
+            throw new Error("WecomAppClient not available");
+        }
+
+        return await withRetry(async () => {
+            const token = await this.getAccessToken();
+            const url = buildApiUrl("/cgi-bin/media/get", {
+                access_token: token,
+                media_id: mediaId,
+            });
+
+            this._logger.debug("Downloading media", { mediaId });
+
+            const resp = await fetch(url, {
+                method: "GET",
+                signal: AbortSignal.timeout(60000), // 媒体下载允许更长超时
+            });
+
+            if (!resp.ok) {
+                throw new Error(`Media download failed: HTTP ${resp.status}`);
+            }
+
+            const contentType = resp.headers.get("content-type") || "";
+
+            // 企业微信在 token 过期时返回 JSON 错误，不是二进制
+            if (contentType.includes("application/json") || contentType.includes("text/plain")) {
+                const data = await resp.json();
+                if (data.errcode === 42001 || data.errcode === 40014) {
+                    this._logger.warn("Access token expired during media download, refreshing", { errcode: data.errcode });
+                    await this.refreshAccessToken();
+                    throw new Error(`Token expired: ${data.errcode}`); // 触发重试
+                }
+                if (data.errcode) {
+                    const errorInfo = parseWecomError(data.errcode, data.errmsg);
+                    throw new Error(`Media download failed: [${data.errcode}] ${errorInfo.message}`);
+                }
+            }
+
+            // 解析文件名（从 Content-Disposition 头）
+            let filename = "media";
+            const disposition = resp.headers.get("content-disposition") || "";
+            const filenameMatch = disposition.match(/filename="?([^";\n]+)"?/i);
+            if (filenameMatch) {
+                filename = filenameMatch[1].trim();
+            } else {
+                // 根据 content-type 推断扩展名
+                if (contentType.includes("audio/amr")) filename = "voice.amr";
+                else if (contentType.includes("audio/silk")) filename = "voice.silk";
+                else if (contentType.includes("audio/")) filename = "voice.amr";
+                else if (contentType.includes("image/")) filename = "image.jpg";
+            }
+
+            const buffer = Buffer.from(await resp.arrayBuffer());
+            this._logger.info("Media downloaded", { mediaId, contentType, filename, size: buffer.length });
+
+            return { buffer, contentType, filename };
+        }, {
+            retries: 2,
+            minTimeout: 1000,
+            maxTimeout: 5000,
+            onRetry: (error, attempt) => {
+                this._logger.warn(`Media download retry ${attempt}`, { error: error.message, mediaId });
+            },
+        });
+    }
+
     /**
      * 获取统计信息
      */
