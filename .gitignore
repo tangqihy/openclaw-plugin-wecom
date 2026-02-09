@@ -1,6 +1,7 @@
 node_modules/
 .DS_Store
 .env
+!.env.example
 dist/
 coverage/
 .idea/
@@ -21,3 +22,10 @@ pnpm-debug.log*
 local.md
 local.sh
 test.sh
+
+# Test audio files
+*.amr
+*.wav
+*.mp3
+*.ogg
+test-audio/

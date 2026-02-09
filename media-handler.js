@@ -1,5 +1,12 @@
 import { logger } from "./logger.js";
 import { wecomAppClient } from "./wecom-app-client.js";
+import { execFile } from "node:child_process";
+import { writeFile, readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * 多媒体消息处理器
@@ -35,9 +42,15 @@ export function getMediaConfig(config) {
         
         // 语音处理
         voiceEnabled: media.voiceHandler !== "none",
-        voiceHandler: media.voiceHandler || "auto",  // "asr" | "auto" | "passthrough" | "none"
+        voiceHandler: media.voiceHandler || "auto",  // "asr" | "azure" | "auto" | "passthrough" | "none"
+        asrProvider: media.asrProvider || "auto",     // "azure" | "whisper" | "auto" (自动检测)
+        // Whisper 兼容 API
         asrApiEndpoint: media.asrApiEndpoint || null,
         asrApiKey: media.asrApiKey || null,
+        // Azure Speech Service (支持环境变量)
+        azureSpeechKey: media.azureSpeechKey || process.env.AZURE_SPEECH_KEY || null,
+        azureSpeechRegion: media.azureSpeechRegion || process.env.AZURE_SPEECH_REGION || null,
+        azureSpeechLang: media.azureSpeechLang || process.env.AZURE_SPEECH_LANG || "zh-CN",
         
         // 文件处理
         fileEnabled: media.fileHandler !== "none",
@@ -165,14 +178,16 @@ export async function handleVoice(message, config) {
         };
     }
 
-    // handler = "asr" 或 "auto": 尝试下载并转录
-    const hasAsrConfig = mediaConfig.asrApiEndpoint && mediaConfig.asrApiKey;
+    // handler = "asr" / "azure" / "auto": 尝试下载并转录
+    const hasWhisperConfig = mediaConfig.asrApiEndpoint && mediaConfig.asrApiKey;
+    const hasAzureConfig = mediaConfig.azureSpeechKey && mediaConfig.azureSpeechRegion;
+    const hasAsrConfig = hasWhisperConfig || hasAzureConfig;
 
-    // "asr" 模式下必须有 ASR 配置
-    if (mediaConfig.voiceHandler === "asr" && !hasAsrConfig) {
-        logger.warn("ASR handler configured but no ASR API endpoint/key provided");
+    // 明确指定 ASR 模式但未配置
+    if ((mediaConfig.voiceHandler === "asr" || mediaConfig.voiceHandler === "azure") && !hasAsrConfig) {
+        logger.warn("ASR/Azure handler configured but no API credentials provided");
         return {
-            textContent: "[语音转文字未配置，请联系管理员]",
+            textContent: "[语音转文字未配置，请联系管理员设置 Azure Speech 或 Whisper API]",
             voiceUrl: voiceUrl,
             transcribed: false,
         };
@@ -230,7 +245,25 @@ export async function handleVoice(message, config) {
 
     // ===== ASR 转录 =====
     try {
-        const transcription = await callAsrApi(voiceBuffer, voiceFilename, mediaConfig);
+        let transcription;
+
+        // 选择 ASR 引擎：Azure 优先（如果配置了），然后 Whisper
+        const useAzure = hasAzureConfig && (
+            mediaConfig.asrProvider === "azure" ||
+            mediaConfig.voiceHandler === "azure" ||
+            (mediaConfig.asrProvider === "auto" && hasAzureConfig)
+        );
+
+        if (useAzure) {
+            logger.info("Using Azure Speech STT", { region: mediaConfig.azureSpeechRegion });
+            transcription = await callAzureSttApi(voiceBuffer, voiceFilename, mediaConfig);
+        } else if (hasWhisperConfig) {
+            logger.info("Using Whisper compatible ASR");
+            transcription = await callWhisperApi(voiceBuffer, voiceFilename, mediaConfig);
+        } else {
+            throw new Error("No ASR provider configured");
+        }
+
         if (!transcription || !transcription.trim()) {
             return {
                 textContent: "[语音内容为空或无法识别]",
@@ -238,7 +271,7 @@ export async function handleVoice(message, config) {
                 transcribed: false,
             };
         }
-        logger.info("Voice transcribed successfully", { length: transcription.length });
+        logger.info("Voice transcribed successfully", { length: transcription.length, provider: useAzure ? "azure" : "whisper" });
         return {
             textContent: transcription,
             voiceUrl: voiceUrl,
@@ -302,6 +335,134 @@ async function callVisionApi(imageUrl, mediaConfig) {
     return data.choices?.[0]?.message?.content || "无法识别图片内容";
 }
 
+// ============================================================================
+// 音频格式转换 (AMR → WAV)
+// ============================================================================
+
+/**
+ * 使用 ffmpeg 将音频转换为 16kHz mono PCM WAV
+ * Azure Speech REST API 要求 WAV 格式
+ *
+ * @param {Buffer} audioBuffer - 原始音频数据
+ * @param {string} inputExt - 输入格式扩展名（如 ".amr"）
+ * @returns {Promise<Buffer>} WAV 格式音频
+ */
+async function convertAudioToWav(audioBuffer, inputExt = ".amr") {
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const tmpInput = join(tmpdir(), `stt_in_${id}${inputExt}`);
+    const tmpOutput = join(tmpdir(), `stt_out_${id}.wav`);
+
+    try {
+        await writeFile(tmpInput, audioBuffer);
+        await execFileAsync("ffmpeg", [
+            "-y",                    // 覆盖输出
+            "-i", tmpInput,          // 输入文件
+            "-f", "wav",             // 输出格式 WAV
+            "-ar", "16000",          // 采样率 16kHz
+            "-ac", "1",              // 单声道
+            "-acodec", "pcm_s16le",  // PCM 16-bit 小端
+            tmpOutput,
+        ], { timeout: 30000 });
+
+        const wavBuffer = await readFile(tmpOutput);
+        logger.debug("Audio converted to WAV", { inputSize: audioBuffer.length, outputSize: wavBuffer.length, inputExt });
+        return wavBuffer;
+    } catch (err) {
+        if (err.code === "ENOENT") {
+            throw new Error(
+                "ffmpeg 未安装。请运行: apt install ffmpeg (Linux) 或 brew install ffmpeg (macOS)"
+            );
+        }
+        throw new Error(`音频转换失败: ${err.message}`);
+    } finally {
+        await unlink(tmpInput).catch(() => {});
+        await unlink(tmpOutput).catch(() => {});
+    }
+}
+
+/**
+ * 检查音频是否需要转换（非 WAV 格式）
+ */
+function needsConversion(filename) {
+    const ext = (filename || "").split(".").pop()?.toLowerCase();
+    return ext !== "wav";
+}
+
+// ============================================================================
+// Azure Speech STT
+// ============================================================================
+
+/**
+ * 调用 Azure Speech-to-Text REST API
+ *
+ * 文档: https://learn.microsoft.com/azure/ai-services/speech-service/rest-speech-to-text-short
+ *
+ * @param {Buffer} voiceBuffer - 语音文件二进制数据
+ * @param {string} filename - 文件名（用于推断格式）
+ * @param {object} mediaConfig - 媒体配置
+ * @returns {Promise<string>} 转录文本
+ */
+async function callAzureSttApi(voiceBuffer, filename, mediaConfig) {
+    const key = mediaConfig.azureSpeechKey;
+    const region = mediaConfig.azureSpeechRegion;
+    const lang = mediaConfig.azureSpeechLang || "zh-CN";
+
+    if (!key || !region) {
+        throw new Error("Azure Speech not configured: missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION");
+    }
+
+    // 如果不是 WAV 格式，先转换
+    let wavBuffer = voiceBuffer;
+    if (needsConversion(filename)) {
+        const ext = (filename || "").includes(".") ? `.${filename.split(".").pop()}` : ".amr";
+        logger.debug("Converting audio for Azure STT", { originalFormat: ext, size: voiceBuffer.length });
+        wavBuffer = await convertAudioToWav(voiceBuffer, ext);
+    }
+
+    const sttUrl = `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${lang}&format=detailed`;
+
+    logger.debug("Calling Azure Speech STT", { region, lang, audioSize: wavBuffer.length });
+
+    const response = await fetch(sttUrl, {
+        method: "POST",
+        headers: {
+            "Ocp-Apim-Subscription-Key": key,
+            "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+            "Accept": "application/json",
+        },
+        body: wavBuffer,
+        signal: AbortSignal.timeout(30000),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`Azure STT HTTP ${response.status}: ${errorText.substring(0, 300)}`);
+    }
+
+    const data = await response.json();
+
+    // Azure STT 返回格式:
+    // { RecognitionStatus: "Success", DisplayText: "你好世界。", NBest: [...] }
+    if (data.RecognitionStatus === "Success") {
+        const text = data.DisplayText || data.NBest?.[0]?.Display || "";
+        logger.info("Azure STT success", { text: text.substring(0, 50), confidence: data.NBest?.[0]?.Confidence });
+        return text;
+    } else if (data.RecognitionStatus === "NoMatch") {
+        logger.warn("Azure STT: no speech recognized");
+        return "";
+    } else if (data.RecognitionStatus === "InitialSilenceTimeout") {
+        logger.warn("Azure STT: initial silence timeout (no speech detected)");
+        return "";
+    } else {
+        logger.warn("Azure STT unexpected status", { status: data.RecognitionStatus, data });
+        return data.DisplayText || "";
+    }
+}
+
+// ============================================================================
+// Whisper 兼容 API
+// ============================================================================
+
 /**
  * 调用语音识别 API
  * 支持 OpenAI Whisper 兼容接口
@@ -310,15 +471,15 @@ async function callVisionApi(imageUrl, mediaConfig) {
  * @param {object} mediaConfig - 媒体配置
  * @returns {Promise<string>} 转录文本
  */
-async function callAsrApi(voiceBuffer, filename, mediaConfig) {
+async function callWhisperApi(voiceBuffer, filename, mediaConfig) {
     const endpoint = mediaConfig.asrApiEndpoint;
     const apiKey = mediaConfig.asrApiKey;
     
     if (!endpoint || !apiKey) {
-        throw new Error("ASR API not configured");
+        throw new Error("Whisper API not configured");
     }
 
-    logger.debug("Calling ASR API", { endpoint, fileSize: voiceBuffer.length, filename });
+    logger.debug("Calling Whisper API", { endpoint, fileSize: voiceBuffer.length, filename });
 
     // 构建 FormData（Node.js 18+ 原生支持）
     const blob = new Blob([voiceBuffer], { type: "audio/amr" });
@@ -338,7 +499,7 @@ async function callAsrApi(voiceBuffer, filename, mediaConfig) {
 
     if (!response.ok) {
         const errorText = await response.text().catch(() => "");
-        throw new Error(`ASR API HTTP ${response.status}: ${errorText.substring(0, 200)}`);
+        throw new Error(`Whisper API HTTP ${response.status}: ${errorText.substring(0, 200)}`);
     }
 
     const data = await response.json();
